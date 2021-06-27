@@ -1,10 +1,15 @@
 use crate::errors::{DeserializationError, SerializationError};
 #[cfg(test)]
-use crate::messages::arbitrary_socks_string;
+use crate::messages::utils::arbitrary_socks_string;
 use crate::serialize::{read_amt, read_string, write_string};
+use crate::standard_roundtrip;
+#[cfg(test)]
+use async_std::task;
+#[cfg(test)]
+use futures::io::Cursor;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
-use quickcheck::{Arbitrary, Gen};
+use quickcheck::{quickcheck, Arbitrary, Gen};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
@@ -149,3 +154,5 @@ impl Arbitrary for SOCKSv5Address {
         .clone()
     }
 }
+
+standard_roundtrip!(address_roundtrips, SOCKSv5Address);
