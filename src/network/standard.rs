@@ -1,5 +1,5 @@
 use crate::messages::ServerResponseStatus;
-use crate::network::address::{SOCKSv5Address, ToSOCKSAddress};
+use crate::network::address::SOCKSv5Address;
 use crate::network::datagram::{Datagramlike, GenericDatagramSocket};
 use crate::network::generic::Networklike;
 use crate::network::listener::{GenericListener, Listenerlike};
@@ -75,12 +75,12 @@ impl Datagramlike for UdpSocket {
 impl Networklike for Builtin {
     type Error = io::Error;
 
-    async fn connect<A: ToSOCKSAddress>(
+    async fn connect<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
     ) -> Result<GenericStream, Self::Error> {
-        let target = addr.to_socks_address();
+        let target = addr.into();
 
         let base_stream = match target {
             SOCKSv5Address::IP4(a) => TcpStream::connect((a, port)).await?,
@@ -91,12 +91,12 @@ impl Networklike for Builtin {
         Ok(GenericStream::from(base_stream))
     }
 
-    async fn listen<A: ToSOCKSAddress>(
+    async fn listen<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
     ) -> Result<GenericListener<Self::Error>, Self::Error> {
-        let target = addr.to_socks_address();
+        let target = addr.into();
 
         let base_stream = match target {
             SOCKSv5Address::IP4(a) => TcpListener::bind((a, port)).await?,
@@ -109,12 +109,12 @@ impl Networklike for Builtin {
         })
     }
 
-    async fn bind<A: ToSOCKSAddress>(
+    async fn bind<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
     ) -> Result<GenericDatagramSocket<Self::Error>, Self::Error> {
-        let target = addr.to_socks_address();
+        let target = addr.into();
 
         let base_socket = match target {
             SOCKSv5Address::IP4(a) => UdpSocket::bind((a, port)).await?,
@@ -158,7 +158,7 @@ impl From<io::Error> for ServerResponseStatus {
 //         addr: A,
 //         port: u16,
 //     ) -> Result<Self::Stream, Self::Error> {
-//         let target = addr.to_socks_address();
+//         let target = addr.into();
 //
 //         match target {
 //             SOCKSv5Address::IP4(a) => TcpStream::connect((a, port)).await,
@@ -172,7 +172,7 @@ impl From<io::Error> for ServerResponseStatus {
 //         addr: A,
 //         port: Option<u16>,
 //     ) -> Result<Self::UdpSocket, Self::Error> {
-//         let me = addr.to_socks_address();
+//         let me = addr.into();
 //         let real_port = port.unwrap_or(0);
 //
 //         match me {
@@ -187,7 +187,7 @@ impl From<io::Error> for ServerResponseStatus {
 //         addr: A,
 //         port: Option<u16>,
 //     ) -> Result<Self::Listener, Self::Error> {
-//         let me = addr.to_socks_address();
+//         let me = addr.into();
 //         let real_port = port.unwrap_or(0);
 //
 //         match me {

@@ -1,10 +1,11 @@
 use crate::messages::ServerResponseStatus;
-use crate::network::address::ToSOCKSAddress;
+use crate::network::address::SOCKSv5Address;
 use crate::network::datagram::GenericDatagramSocket;
 use crate::network::listener::GenericListener;
 use crate::network::stream::GenericStream;
 use async_trait::async_trait;
 use std::fmt::Display;
+
 
 #[async_trait]
 pub trait Networklike {
@@ -19,7 +20,7 @@ pub trait Networklike {
     /// may be exactly what you're using. However, in order to support tunnelling
     /// scenarios (i.e., using another proxy, going through Tor or SSH, etc.) we
     /// work generically over any stream-like object.
-    async fn connect<A: ToSOCKSAddress>(
+    async fn connect<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
@@ -27,7 +28,7 @@ pub trait Networklike {
 
     /// Listen for connections on the given address and port, returning a generic
     /// listener socket to use in the future.
-    async fn listen<A: ToSOCKSAddress>(
+    async fn listen<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
@@ -40,7 +41,7 @@ pub trait Networklike {
     ///
     /// Recall when using these functions that datagram protocols allow for packet
     /// loss and out-of-order delivery. So ... be warned.
-    async fn bind<A: ToSOCKSAddress>(
+    async fn bind<A: Send + Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,

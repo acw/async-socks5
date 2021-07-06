@@ -6,7 +6,7 @@ pub mod standard;
 pub mod stream;
 
 use crate::messages::ServerResponseStatus;
-pub use crate::network::address::{SOCKSv5Address, ToSOCKSAddress};
+pub use crate::network::address::SOCKSv5Address;
 pub use crate::network::standard::Builtin;
 use async_trait::async_trait;
 use futures::{AsyncRead, AsyncWrite};
@@ -19,17 +19,17 @@ pub trait Network {
     type UdpSocket;
     type Error: fmt::Debug + fmt::Display + Into<ServerResponseStatus>;
 
-    async fn connect<A: ToSOCKSAddress>(
+    async fn connect<A: Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: u16,
     ) -> Result<Self::Stream, Self::Error>;
-    async fn udp_socket<A: ToSOCKSAddress>(
+    async fn udp_socket<A: Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: Option<u16>,
     ) -> Result<Self::UdpSocket, Self::Error>;
-    async fn listen<A: ToSOCKSAddress>(
+    async fn listen<A: Into<SOCKSv5Address>>(
         &mut self,
         addr: A,
         port: Option<u16>,

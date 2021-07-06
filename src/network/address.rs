@@ -10,13 +10,11 @@ use futures::io::Cursor;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
+use std::convert::TryFrom;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
-
-pub trait ToSOCKSAddress: Send {
-    fn to_socks_address(&self) -> SOCKSv5Address;
-}
+use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SOCKSv5Address {
@@ -25,42 +23,83 @@ pub enum SOCKSv5Address {
     Name(String),
 }
 
-impl ToSOCKSAddress for SOCKSv5Address {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        self.clone()
-    }
+#[derive(Error, Debug, PartialEq)]
+pub enum AddressConversionError {
+    #[error("Couldn't convert IPv4 address into destination type")]
+    CouldntConvertIP4,
+    #[error("Couldn't convert IPv6 address into destination type")]
+    CouldntConvertIP6,
+    #[error("Couldn't convert name into destination type")]
+    CouldntConvertName,
 }
 
-impl ToSOCKSAddress for IpAddr {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        match self {
-            IpAddr::V4(a) => SOCKSv5Address::IP4(*a),
-            IpAddr::V6(a) => SOCKSv5Address::IP6(*a),
+
+impl From<IpAddr> for SOCKSv5Address {
+    fn from(x: IpAddr) -> SOCKSv5Address {
+        match x {
+            IpAddr::V4(a) => SOCKSv5Address::IP4(a),
+            IpAddr::V6(a) => SOCKSv5Address::IP6(a),
         }
     }
 }
 
-impl ToSOCKSAddress for Ipv4Addr {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        SOCKSv5Address::IP4(*self)
+impl TryFrom<SOCKSv5Address> for IpAddr {
+    type Error = AddressConversionError;
+
+    fn try_from(value: SOCKSv5Address) -> Result<Self, Self::Error> {
+        match value {
+            SOCKSv5Address::IP4(a) => Ok(IpAddr::V4(a)),
+            SOCKSv5Address::IP6(a) => Ok(IpAddr::V6(a)),
+            SOCKSv5Address::Name(_) => Err(AddressConversionError::CouldntConvertName),
+        }
     }
 }
 
-impl ToSOCKSAddress for Ipv6Addr {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        SOCKSv5Address::IP6(*self)
+impl From<Ipv4Addr> for SOCKSv5Address {
+    fn from(x: Ipv4Addr) -> Self {
+       SOCKSv5Address::IP4(x) 
     }
 }
 
-impl ToSOCKSAddress for String {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        SOCKSv5Address::Name(self.clone())
+impl TryFrom<SOCKSv5Address> for Ipv4Addr {
+    type Error = AddressConversionError;
+
+    fn try_from(value: SOCKSv5Address) -> Result<Self, Self::Error> {
+        match value {
+            SOCKSv5Address::IP4(a) => Ok(a),
+            SOCKSv5Address::IP6(_) => Err(AddressConversionError::CouldntConvertIP6),
+            SOCKSv5Address::Name(_) => Err(AddressConversionError::CouldntConvertName),
+        }
     }
 }
 
-impl<'a> ToSOCKSAddress for &'a str {
-    fn to_socks_address(&self) -> SOCKSv5Address {
-        SOCKSv5Address::Name(self.to_string())
+impl From<Ipv6Addr> for SOCKSv5Address {
+    fn from(x: Ipv6Addr) -> Self {
+       SOCKSv5Address::IP6(x) 
+    }
+}
+
+impl TryFrom<SOCKSv5Address> for Ipv6Addr {
+    type Error = AddressConversionError;
+
+    fn try_from(value: SOCKSv5Address) -> Result<Self, Self::Error> {
+        match value {
+            SOCKSv5Address::IP4(_) => Err(AddressConversionError::CouldntConvertIP4),
+            SOCKSv5Address::IP6(a) => Ok(a),
+            SOCKSv5Address::Name(_) => Err(AddressConversionError::CouldntConvertName),
+        }
+    }
+}
+
+impl From<String> for SOCKSv5Address {
+    fn from(x: String) -> Self {
+        SOCKSv5Address::Name(x)
+    }
+}
+
+impl<'a> From<&'a str> for SOCKSv5Address {
+    fn from(x: &str) -> SOCKSv5Address {
+        SOCKSv5Address::Name(x.to_string())
     }
 }
 
@@ -70,15 +109,6 @@ impl fmt::Display for SOCKSv5Address {
             SOCKSv5Address::IP4(a) => write!(f, "{}", a),
             SOCKSv5Address::IP6(a) => write!(f, "{}", a),
             SOCKSv5Address::Name(a) => write!(f, "{}", a),
-        }
-    }
-}
-
-impl From<IpAddr> for SOCKSv5Address {
-    fn from(addr: IpAddr) -> SOCKSv5Address {
-        match addr {
-            IpAddr::V4(a) => SOCKSv5Address::IP4(a),
-            IpAddr::V6(a) => SOCKSv5Address::IP6(a),
         }
     }
 }
@@ -156,3 +186,65 @@ impl Arbitrary for SOCKSv5Address {
 }
 
 standard_roundtrip!(address_roundtrips, SOCKSv5Address);
+
+#[cfg(test)]
+quickcheck! {
+    fn ip_conversion(x: IpAddr) -> bool {
+        match x {
+            IpAddr::V4(ref a) =>
+                assert_eq!(Err(AddressConversionError::CouldntConvertIP4),
+                           Ipv6Addr::try_from(SOCKSv5Address::from(a.clone()))),
+            IpAddr::V6(ref a) =>
+                assert_eq!(Err(AddressConversionError::CouldntConvertIP6),
+                           Ipv4Addr::try_from(SOCKSv5Address::from(a.clone()))),
+        }
+        x == IpAddr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+    }
+
+    fn ip4_conversion(x: Ipv4Addr) -> bool {
+        x == Ipv4Addr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+    }
+
+    fn ip6_conversion(x: Ipv6Addr) -> bool {
+        x == Ipv6Addr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+    }
+
+    fn display_matches(x: SOCKSv5Address) -> bool {
+        match x {
+            SOCKSv5Address::IP4(a) => format!("{}", a) == format!("{}", x),
+            SOCKSv5Address::IP6(a) => format!("{}", a) == format!("{}", x),
+            SOCKSv5Address::Name(ref a) => format!("{}", a) == format!("{}", x),
+        }
+    }
+
+    fn bad_read_key(x: u8) -> bool {
+        match x {
+            1 => true,
+            3 => true,
+            4 => true,
+            _ => {
+                let buffer = [x, 0, 1, 2, 9, 10];
+                let mut cursor = Cursor::new(buffer);
+                let meh = SOCKSv5Address::read(Pin::new(&mut cursor));
+                Err(DeserializationError::InvalidAddressType(x)) == task::block_on(meh)
+            }
+        }
+    }
+}
+
+#[test]
+fn domain_name_sanity() {
+    let name = "uhsure.com";
+    let strname = name.to_string();
+
+    let addr1 = SOCKSv5Address::from(name);
+    let addr2 = SOCKSv5Address::from(strname);
+
+    assert_eq!(addr1, addr2);
+    assert_eq!(Err(AddressConversionError::CouldntConvertName),
+               IpAddr::try_from(addr1.clone()));
+    assert_eq!(Err(AddressConversionError::CouldntConvertName),
+               Ipv4Addr::try_from(addr1.clone()));
+    assert_eq!(Err(AddressConversionError::CouldntConvertName),
+               Ipv6Addr::try_from(addr1.clone()));
+}
