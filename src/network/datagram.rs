@@ -1,8 +1,8 @@
-use crate::network::address::SOCKSv5Address;
+use crate::network::address::{HasLocalAddress, SOCKSv5Address};
 use async_trait::async_trait;
 
 #[async_trait]
-pub trait Datagramlike: Send + Sync {
+pub trait Datagramlike: Send + Sync + HasLocalAddress {
     type Error;
 
     async fn send_to(
@@ -33,5 +33,11 @@ impl<E> Datagramlike for GenericDatagramSocket<E> {
 
     async fn recv_from(&self, buf: &mut [u8]) -> Result<(usize, SOCKSv5Address, u16), Self::Error> {
         Ok(self.internal.recv_from(buf).await?)
+    }
+}
+
+impl<E> HasLocalAddress for GenericDatagramSocket<E> {
+    fn local_addr(&self) -> (SOCKSv5Address, u16) {
+        self.internal.local_addr()
     }
 }

@@ -3,6 +3,7 @@ use crate::messages::{
     AuthenticationMethod, ClientConnectionCommand, ClientConnectionRequest, ClientGreeting,
     ClientUsernamePassword, ServerChoice, ServerResponse, ServerResponseStatus,
 };
+use crate::network::address::HasLocalAddress;
 use crate::network::generic::Networklike;
 use crate::network::listener::{GenericListener, Listenerlike};
 use crate::network::stream::GenericStream;
@@ -45,7 +46,7 @@ impl<N: Networklike + Send + 'static> SOCKSv5Server<N> {
     }
 
     pub async fn run(self) -> Result<(), N::Error> {
-        let (my_addr, my_port) = self.listener.info();
+        let (my_addr, my_port) = self.listener.local_addr();
         info!("Starting SOCKSv5 server on {}:{}", my_addr, my_port);
         let locked_network = Arc::new(Mutex::new(self.network));
 
@@ -241,7 +242,7 @@ where
                         continue;
                     }
                 };
-                let (bound_address, bound_port) = incoming_listener.info();
+                let (bound_address, bound_port) = incoming_listener.local_addr();
                 trace!(
                     "Set up {}:{} to address request for {}:{}",
                     bound_address,

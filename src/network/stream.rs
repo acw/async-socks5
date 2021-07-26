@@ -1,10 +1,13 @@
 use async_std::task::{Context, Poll};
 use futures::io;
+use crate::network::SOCKSv5Address;
 use futures::io::{AsyncRead, AsyncWrite};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-pub trait Streamlike: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
+use super::address::HasLocalAddress;
+
+pub trait Streamlike: AsyncRead + AsyncWrite + HasLocalAddress + Send + Sync + Unpin {}
 
 #[derive(Clone)]
 pub struct GenericStream {
@@ -19,6 +22,11 @@ impl GenericStream {
     }
 }
 
+impl HasLocalAddress for GenericStream {
+    fn local_addr(&self) -> (SOCKSv5Address, u16) {
+        let item = self.internal.lock().unwrap();
+        item.local_addr()
+    }
 }
 
 impl AsyncRead for GenericStream {

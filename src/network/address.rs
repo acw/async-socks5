@@ -168,6 +168,10 @@ impl SOCKSv5Address {
     }
 }
 
+pub trait HasLocalAddress {
+    fn local_addr(&self) -> (SOCKSv5Address, u16);
+}
+
 #[cfg(test)]
 impl Arbitrary for SOCKSv5Address {
     fn arbitrary(g: &mut Gen) -> Self {
