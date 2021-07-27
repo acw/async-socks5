@@ -98,7 +98,7 @@ impl Networklike for Builtin {
             SOCKSv5Address::Name(n) => TcpStream::connect((n.as_str(), port)).await?,
         };
 
-        Ok(GenericStream::new(base_stream))
+        Ok(GenericStream::from(base_stream))
     }
 
     async fn listen<A: Send + Into<SOCKSv5Address>>(
@@ -179,6 +179,8 @@ fn check_sanity() {
         let (sender_address, sender_port) = sender.local_addr();
         let send_buffer = [0xa, 0xff, 0xab, 0x1e];
         sender.write_all(&send_buffer).await.expect("Couldn't send the write buffer");
+        sender.flush().await.expect("Couldn't flush the write buffer");
+        sender.close().await.expect("Couldn't close the write buffer");
         (sender_address, sender_port)
     });
 
