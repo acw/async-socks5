@@ -34,7 +34,7 @@ macro_rules! local_address_impl {
                      }
                 }
             }
-       } 
+       }
     };
 }
 
@@ -145,13 +145,25 @@ fn check_sanity() {
         // going to get any dropped data along here ... which is a very questionable
         // assumption, morally speaking, but probably fine for most purposes.
         let mut network = Builtin::new();
-        let receiver = network.bind("localhost", 0).await.expect("Failed to bind receiver socket.");
-        let sender = network.bind("localhost", 0).await.expect("Failed to bind sender socket.");
+        let receiver = network
+            .bind("localhost", 0)
+            .await
+            .expect("Failed to bind receiver socket.");
+        let sender = network
+            .bind("localhost", 0)
+            .await
+            .expect("Failed to bind sender socket.");
         let buffer = [0xde, 0xea, 0xbe, 0xef];
         let (receiver_addr, receiver_port) = receiver.local_addr();
-        sender.send_to(&buffer, receiver_addr, receiver_port).await.expect("Failure sending datagram!");
+        sender
+            .send_to(&buffer, receiver_addr, receiver_port)
+            .await
+            .expect("Failure sending datagram!");
         let mut recvbuffer = [0; 4];
-        let (s, f, p) = receiver.recv_from(&mut recvbuffer).await.expect("Didn't receive UDP message?");
+        let (s, f, p) = receiver
+            .recv_from(&mut recvbuffer)
+            .await
+            .expect("Didn't receive UDP message?");
         let (sender_addr, sender_port) = sender.local_addr();
         assert_eq!(s, 4);
         assert_eq!(f, sender_addr);
@@ -163,24 +175,40 @@ fn check_sanity() {
     // on is in a pretty weird place.
     let mut network = Builtin::new();
 
-    let listener = async_std::task::block_on(network.listen("localhost", 0)).expect("Couldn't set up listener on localhost");
+    let listener = async_std::task::block_on(network.listen("localhost", 0))
+        .expect("Couldn't set up listener on localhost");
     let (listener_address, listener_port) = listener.local_addr();
 
     let listener_task_handle = async_std::task::spawn(async move {
         let (mut stream, addr, port) = listener.accept().await.expect("Didn't get connection");
         let mut result_buffer = [0u8; 4];
         println!("Starting read!");
-        stream.read_exact(&mut result_buffer).await.expect("Read failure in TCP test");
+        stream
+            .read_exact(&mut result_buffer)
+            .await
+            .expect("Read failure in TCP test");
         (result_buffer, addr, port)
     });
 
     let sender_task_handle = async_std::task::spawn(async move {
-        let mut sender = network.connect(listener_address, listener_port).await.expect("Coudln't connect to listener?");
+        let mut sender = network
+            .connect(listener_address, listener_port)
+            .await
+            .expect("Coudln't connect to listener?");
         let (sender_address, sender_port) = sender.local_addr();
         let send_buffer = [0xa, 0xff, 0xab, 0x1e];
-        sender.write_all(&send_buffer).await.expect("Couldn't send the write buffer");
-        sender.flush().await.expect("Couldn't flush the write buffer");
-        sender.close().await.expect("Couldn't close the write buffer");
+        sender
+            .write_all(&send_buffer)
+            .await
+            .expect("Couldn't send the write buffer");
+        sender
+            .flush()
+            .await
+            .expect("Couldn't flush the write buffer");
+        sender
+            .close()
+            .await
+            .expect("Couldn't close the write buffer");
         (sender_address, sender_port)
     });
 

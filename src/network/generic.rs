@@ -6,7 +6,6 @@ use crate::network::stream::GenericStream;
 use async_trait::async_trait;
 use std::fmt::Display;
 
-
 #[async_trait]
 pub trait Networklike {
     /// The error type for things that fail on this network. Apologies in advance

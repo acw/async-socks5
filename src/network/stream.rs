@@ -1,6 +1,6 @@
+use crate::network::SOCKSv5Address;
 use async_std::task::{Context, Poll};
 use futures::io;
-use crate::network::SOCKSv5Address;
 use futures::io::{AsyncRead, AsyncWrite};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -16,8 +16,8 @@ pub struct GenericStream {
 
 impl GenericStream {
     pub fn new<T: Streamlike + 'static>(x: T) -> GenericStream {
-        GenericStream{ 
-            internal: Arc::new(Mutex::new(x))
+        GenericStream {
+            internal: Arc::new(Mutex::new(x)),
         }
     }
 }

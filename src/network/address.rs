@@ -33,7 +33,6 @@ pub enum AddressConversionError {
     CouldntConvertName,
 }
 
-
 impl From<IpAddr> for SOCKSv5Address {
     fn from(x: IpAddr) -> SOCKSv5Address {
         match x {
@@ -57,7 +56,7 @@ impl TryFrom<SOCKSv5Address> for IpAddr {
 
 impl From<Ipv4Addr> for SOCKSv5Address {
     fn from(x: Ipv4Addr) -> Self {
-       SOCKSv5Address::IP4(x) 
+        SOCKSv5Address::IP4(x)
     }
 }
 
@@ -75,7 +74,7 @@ impl TryFrom<SOCKSv5Address> for Ipv4Addr {
 
 impl From<Ipv6Addr> for SOCKSv5Address {
     fn from(x: Ipv6Addr) -> Self {
-       SOCKSv5Address::IP6(x) 
+        SOCKSv5Address::IP6(x)
     }
 }
 
@@ -245,10 +244,16 @@ fn domain_name_sanity() {
     let addr2 = SOCKSv5Address::from(strname);
 
     assert_eq!(addr1, addr2);
-    assert_eq!(Err(AddressConversionError::CouldntConvertName),
-               IpAddr::try_from(addr1.clone()));
-    assert_eq!(Err(AddressConversionError::CouldntConvertName),
-               Ipv4Addr::try_from(addr1.clone()));
-    assert_eq!(Err(AddressConversionError::CouldntConvertName),
-               Ipv6Addr::try_from(addr1.clone()));
+    assert_eq!(
+        Err(AddressConversionError::CouldntConvertName),
+        IpAddr::try_from(addr1.clone())
+    );
+    assert_eq!(
+        Err(AddressConversionError::CouldntConvertName),
+        Ipv4Addr::try_from(addr1.clone())
+    );
+    assert_eq!(
+        Err(AddressConversionError::CouldntConvertName),
+        Ipv6Addr::try_from(addr1.clone())
+    );
 }
