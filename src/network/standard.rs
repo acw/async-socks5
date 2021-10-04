@@ -21,6 +21,12 @@ impl Builtin {
     }
 }
 
+impl Default for Builtin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 macro_rules! local_address_impl {
     ($t: ty) => {
        impl HasLocalAddress for $t {
@@ -182,7 +188,6 @@ fn check_sanity() {
     let listener_task_handle = async_std::task::spawn(async move {
         let (mut stream, addr, port) = listener.accept().await.expect("Didn't get connection");
         let mut result_buffer = [0u8; 4];
-        println!("Starting read!");
         stream
             .read_exact(&mut result_buffer)
             .await

@@ -123,7 +123,7 @@ async fn run_authentication(
         Ok(cg)
             if cg
                 .acceptable_methods
-                .contains(&&AuthenticationMethod::UsernameAndPassword)
+                .contains(&AuthenticationMethod::UsernameAndPassword)
                 && params.check_password.is_some() =>
         {
             match ClientUsernamePassword::read(Pin::new(&mut stream)).await {
@@ -147,7 +147,7 @@ async fn run_authentication(
 
         // and, in the worst case, we'll see if our user is cool with unauthenticated connections
         Ok(cg)
-            if cg.acceptable_methods.contains(&&AuthenticationMethod::None)
+            if cg.acceptable_methods.contains(&AuthenticationMethod::None)
                 && params.allow_unauthenticated =>
         {
             Some(stream)
