@@ -13,7 +13,6 @@ use log::warn;
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
 use std::net::Ipv4Addr;
-use std::pin::Pin;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -57,12 +56,11 @@ impl ServerResponse {
 
 impl ServerResponse {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<Self, DeserializationError> {
         let mut buffer = [0; 3];
-        let raw_r = Pin::into_inner(r);
 
-        read_amt(Pin::new(raw_r), 3, &mut buffer).await?;
+        read_amt(r, 3, &mut buffer).await?;
 
         if buffer[0] != 5 {
             return Err(DeserializationError::InvalidVersion(5, buffer[0]));
@@ -85,8 +83,8 @@ impl ServerResponse {
             x => return Err(DeserializationError::InvalidServerResponse(x)),
         };
 
-        let bound_address = SOCKSv5Address::read(Pin::new(raw_r)).await?;
-        read_amt(Pin::new(raw_r), 2, &mut buffer).await?;
+        let bound_address = SOCKSv5Address::read(r).await?;
+        read_amt(r, 2, &mut buffer).await?;
         let bound_port = ((buffer[0] as u16) << 8) + (buffer[1] as u16);
 
         Ok(ServerResponse {
@@ -162,7 +160,7 @@ standard_roundtrip!(server_response_roundtrips, ServerResponse);
 fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ServerResponse::read(Pin::new(&mut cursor));
+    let ys = ServerResponse::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 }
 
@@ -170,7 +168,7 @@ fn check_short_reads() {
 fn check_bad_version() {
     let bad_ver = vec![6, 1, 1];
     let mut cursor = Cursor::new(bad_ver);
-    let ys = ServerResponse::read(Pin::new(&mut cursor));
+    let ys = ServerResponse::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidVersion(5, 6)),
         task::block_on(ys)
@@ -181,7 +179,7 @@ fn check_bad_version() {
 fn check_bad_command() {
     let bad_cmd = vec![5, 32, 0x42];
     let mut cursor = Cursor::new(bad_cmd);
-    let ys = ServerResponse::read(Pin::new(&mut cursor));
+    let ys = ServerResponse::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidServerResponse(32)),
         task::block_on(ys)

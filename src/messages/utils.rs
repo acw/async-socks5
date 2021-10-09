@@ -25,7 +25,7 @@ macro_rules! standard_roundtrip {
                 let mut buffer = vec![];
                 task::block_on(xs.write(&mut buffer)).unwrap();
                 let mut cursor = Cursor::new(buffer);
-                let ys = <$t>::read(Pin::new(&mut cursor));
+                let ys = <$t>::read(&mut cursor);
                 xs == task::block_on(ys).unwrap()
             }
         }

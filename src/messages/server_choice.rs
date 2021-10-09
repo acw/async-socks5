@@ -10,7 +10,6 @@ use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
-use std::pin::Pin;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerChoice {
@@ -19,7 +18,7 @@ pub struct ServerChoice {
 
 impl ServerChoice {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        mut r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<Self, DeserializationError> {
         let mut buffer = [0; 1];
 
@@ -60,12 +59,12 @@ standard_roundtrip!(server_choice_roundtrips, ServerChoice);
 fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ServerChoice::read(Pin::new(&mut cursor));
+    let ys = ServerChoice::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 
     let bad_len = vec![5];
     let mut cursor = Cursor::new(bad_len);
-    let ys = ServerChoice::read(Pin::new(&mut cursor));
+    let ys = ServerChoice::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::AuthenticationMethodError(
             AuthenticationDeserializationError::NoDataFound
@@ -78,7 +77,7 @@ fn check_short_reads() {
 fn check_bad_version() {
     let no_len = vec![9, 1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ServerChoice::read(Pin::new(&mut cursor));
+    let ys = ServerChoice::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidVersion(5, 9)),
         task::block_on(ys)

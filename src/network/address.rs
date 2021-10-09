@@ -13,7 +13,6 @@ use quickcheck::{quickcheck, Arbitrary, Gen};
 use std::convert::TryFrom;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::pin::Pin;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -114,7 +113,7 @@ impl fmt::Display for SOCKSv5Address {
 
 impl SOCKSv5Address {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        mut r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<Self, DeserializationError> {
         let mut byte_buffer = [0u8; 1];
         let amount_read = r.read(&mut byte_buffer).await?;
@@ -228,7 +227,7 @@ quickcheck! {
             _ => {
                 let buffer = [x, 0, 1, 2, 9, 10];
                 let mut cursor = Cursor::new(buffer);
-                let meh = SOCKSv5Address::read(Pin::new(&mut cursor));
+                let meh = SOCKSv5Address::read(&mut cursor);
                 Err(DeserializationError::InvalidAddressType(x)) == task::block_on(meh)
             }
         }

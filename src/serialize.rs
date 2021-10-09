@@ -1,9 +1,8 @@
 use crate::errors::{DeserializationError, SerializationError};
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use std::pin::Pin;
 
 pub async fn read_string<R: AsyncRead + Send + Unpin>(
-    mut r: Pin<&mut R>,
+    r: &mut R,
 ) -> Result<String, DeserializationError> {
     let mut length_buffer = [0; 1];
 
@@ -40,7 +39,7 @@ pub async fn write_string<W: AsyncWrite + Send + Unpin>(
 }
 
 pub async fn read_amt<R: AsyncRead + Send + Unpin>(
-    mut r: Pin<&mut R>,
+    r: &mut R,
     amt: usize,
     buffer: &mut [u8],
 ) -> Result<(), DeserializationError> {

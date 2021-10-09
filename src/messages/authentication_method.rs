@@ -8,7 +8,6 @@ use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
 use std::fmt;
-use std::pin::Pin;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,7 +47,7 @@ impl fmt::Display for AuthenticationMethod {
 
 impl AuthenticationMethod {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        mut r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<AuthenticationMethod, DeserializationError> {
         let mut byte_buffer = [0u8; 1];
         let amount_read = r.read(&mut byte_buffer).await?;
@@ -123,7 +122,7 @@ standard_roundtrip!(auth_byte_roundtrips, AuthenticationMethod);
 fn bad_byte() {
     let no_len = vec![42];
     let mut cursor = Cursor::new(no_len);
-    let ys = AuthenticationMethod::read(Pin::new(&mut cursor));
+    let ys = AuthenticationMethod::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::AuthenticationMethodError(
             AuthenticationDeserializationError::InvalidAuthenticationByte(42)

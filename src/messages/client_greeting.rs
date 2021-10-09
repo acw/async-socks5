@@ -10,7 +10,6 @@ use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
-use std::pin::Pin;
 
 /// Client greetings are the first message sent in a SOCKSv5 session. They
 /// identify that there's a client that wants to talk to a server, and that
@@ -24,12 +23,11 @@ pub struct ClientGreeting {
 
 impl ClientGreeting {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<ClientGreeting, DeserializationError> {
         let mut buffer = [0; 1];
-        let raw_r = Pin::into_inner(r);
 
-        if raw_r.read(&mut buffer).await? == 0 {
+        if r.read(&mut buffer).await? == 0 {
             return Err(DeserializationError::NotEnoughData);
         }
 
@@ -37,13 +35,13 @@ impl ClientGreeting {
             return Err(DeserializationError::InvalidVersion(5, buffer[0]));
         }
 
-        if raw_r.read(&mut buffer).await? == 0 {
+        if r.read(&mut buffer).await? == 0 {
             return Err(DeserializationError::NotEnoughData);
         }
 
         let mut acceptable_methods = Vec::with_capacity(buffer[0] as usize);
         for _ in 0..buffer[0] {
-            acceptable_methods.push(AuthenticationMethod::read(Pin::new(raw_r)).await?);
+            acceptable_methods.push(AuthenticationMethod::read(r).await?);
         }
 
         Ok(ClientGreeting { acceptable_methods })
@@ -90,17 +88,17 @@ standard_roundtrip!(client_greeting_roundtrips, ClientGreeting);
 fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ClientGreeting::read(Pin::new(&mut cursor));
+    let ys = ClientGreeting::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 
     let no_len = vec![5];
     let mut cursor = Cursor::new(no_len);
-    let ys = ClientGreeting::read(Pin::new(&mut cursor));
+    let ys = ClientGreeting::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 
     let bad_len = vec![5, 9];
     let mut cursor = Cursor::new(bad_len);
-    let ys = ClientGreeting::read(Pin::new(&mut cursor));
+    let ys = ClientGreeting::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::AuthenticationMethodError(
             AuthenticationDeserializationError::NoDataFound
@@ -113,7 +111,7 @@ fn check_short_reads() {
 fn check_bad_version() {
     let no_len = vec![6, 1, 1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ClientGreeting::read(Pin::new(&mut cursor));
+    let ys = ClientGreeting::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidVersion(5, 6)),
         task::block_on(ys)

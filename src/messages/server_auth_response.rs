@@ -7,7 +7,6 @@ use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
-use std::pin::Pin;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerAuthResponse {
@@ -16,7 +15,7 @@ pub struct ServerAuthResponse {
 
 impl ServerAuthResponse {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        mut r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<Self, DeserializationError> {
         let mut buffer = [0; 1];
 
@@ -62,12 +61,12 @@ standard_roundtrip!(server_auth_response, ServerAuthResponse);
 fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ServerAuthResponse::read(Pin::new(&mut cursor));
+    let ys = ServerAuthResponse::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 
     let no_len = vec![1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ServerAuthResponse::read(Pin::new(&mut cursor));
+    let ys = ServerAuthResponse::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 }
 
@@ -75,7 +74,7 @@ fn check_short_reads() {
 fn check_bad_version() {
     let no_len = vec![6, 1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ServerAuthResponse::read(Pin::new(&mut cursor));
+    let ys = ServerAuthResponse::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidVersion(1, 6)),
         task::block_on(ys)

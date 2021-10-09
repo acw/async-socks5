@@ -13,7 +13,6 @@ use async_std::io::prelude::WriteExt;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use log::{error, info, trace, warn};
-use std::pin::Pin;
 use thiserror::Error;
 
 pub struct SOCKSv5Server<N: Networklike> {
@@ -89,7 +88,7 @@ async fn run_authentication(
     addr: SOCKSv5Address,
     port: u16,
 ) -> Option<GenericStream> {
-    match ClientGreeting::read(Pin::new(&mut stream)).await {
+    match ClientGreeting::read(&mut stream).await {
         Err(e) => {
             error!(
                 "Client hello deserialization error from {}:{}:  {}",
@@ -126,7 +125,7 @@ async fn run_authentication(
                 .contains(&AuthenticationMethod::UsernameAndPassword)
                 && params.check_password.is_some() =>
         {
-            match ClientUsernamePassword::read(Pin::new(&mut stream)).await {
+            match ClientUsernamePassword::read(&mut stream).await {
                 Err(e) => {
                     warn!(
                         "Error reading username/password from {}:{}: {}",
@@ -194,7 +193,7 @@ where
     N::Error: 'static,
 {
     loop {
-        let ccr = ClientConnectionRequest::read(Pin::new(&mut stream)).await?;
+        let ccr = ClientConnectionRequest::read(&mut stream).await?;
 
         match ccr.command_code {
             ClientConnectionCommand::AssociateUDPPort => {}

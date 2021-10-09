@@ -13,7 +13,6 @@ use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use quickcheck::{quickcheck, Arbitrary, Gen};
 #[cfg(test)]
 use std::net::Ipv4Addr;
-use std::pin::Pin;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClientConnectionCommand {
@@ -31,12 +30,11 @@ pub struct ClientConnectionRequest {
 
 impl ClientConnectionRequest {
     pub async fn read<R: AsyncRead + Send + Unpin>(
-        r: Pin<&mut R>,
+        r: &mut R,
     ) -> Result<Self, DeserializationError> {
         let mut buffer = [0; 2];
-        let raw_r = Pin::into_inner(r);
 
-        read_amt(Pin::new(raw_r), 2, &mut buffer).await?;
+        read_amt(r, 2, &mut buffer).await?;
 
         if buffer[0] != 5 {
             return Err(DeserializationError::InvalidVersion(5, buffer[0]));
@@ -49,9 +47,9 @@ impl ClientConnectionRequest {
             x => return Err(DeserializationError::InvalidClientCommand(x)),
         };
 
-        let destination_address = SOCKSv5Address::read(Pin::new(raw_r)).await?;
+        let destination_address = SOCKSv5Address::read(r).await?;
 
-        read_amt(Pin::new(raw_r), 2, &mut buffer).await?;
+        read_amt(r, 2, &mut buffer).await?;
         let destination_port = ((buffer[0] as u16) << 8) + (buffer[1] as u16);
 
         Ok(ClientConnectionRequest {
@@ -115,12 +113,12 @@ standard_roundtrip!(client_request_roundtrips, ClientConnectionRequest);
 fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ClientConnectionRequest::read(Pin::new(&mut cursor));
+    let ys = ClientConnectionRequest::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 
     let no_len = vec![5, 1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ClientConnectionRequest::read(Pin::new(&mut cursor));
+    let ys = ClientConnectionRequest::read(&mut cursor);
     assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
 }
 
@@ -128,7 +126,7 @@ fn check_short_reads() {
 fn check_bad_version() {
     let bad_ver = vec![6, 1, 1];
     let mut cursor = Cursor::new(bad_ver);
-    let ys = ClientConnectionRequest::read(Pin::new(&mut cursor));
+    let ys = ClientConnectionRequest::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidVersion(5, 6)),
         task::block_on(ys)
@@ -139,7 +137,7 @@ fn check_bad_version() {
 fn check_bad_command() {
     let bad_cmd = vec![5, 32, 1];
     let mut cursor = Cursor::new(bad_cmd);
-    let ys = ClientConnectionRequest::read(Pin::new(&mut cursor));
+    let ys = ClientConnectionRequest::read(&mut cursor);
     assert_eq!(
         Err(DeserializationError::InvalidClientCommand(32)),
         task::block_on(ys)

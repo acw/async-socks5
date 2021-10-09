@@ -6,7 +6,6 @@ use crate::messages::{
 use crate::network::{Network, SOCKSv5Address};
 use async_std::net::IpAddr;
 use futures::io::{AsyncRead, AsyncWrite};
-use std::pin::Pin;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
