@@ -84,7 +84,7 @@ impl fmt::Display for TestStackError {
 
 impl From<TestStackError> for ServerResponseStatus {
     fn from(_: TestStackError) -> Self {
-       ServerResponseStatus::GeneralFailure 
+        ServerResponseStatus::GeneralFailure
     }
 }
 
