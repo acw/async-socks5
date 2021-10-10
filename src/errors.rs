@@ -2,6 +2,8 @@ use std::io;
 use std::string::FromUtf8Error;
 use thiserror::Error;
 
+use crate::network::SOCKSv5Address;
+
 /// All the errors that can pop up when trying to turn raw bytes into SOCKSv5
 /// messages.
 #[derive(Error, Debug)]
@@ -163,4 +165,24 @@ impl PartialEq for AuthenticationDeserializationError {
             (_, _) => false,
         }
     }
+}
+
+/// The errors that can happen, as a server, when we're negotiating the start
+/// of a SOCKS session.
+#[derive(Debug, Error)]
+pub enum AuthenticationError {
+    #[error("Firewall disallowed connection from {0}:{1}")]
+    FirewallRejected(SOCKSv5Address, u16),
+    #[error("Could not agree on an authentication method with the client")]
+    ItsNotUsItsYou,
+    #[error("Failure in serializing response message: {0}")]
+    SerializationError(#[from] SerializationError),
+    #[error("Failed TLS handshake")]
+    FailedTLSHandshake,
+    #[error("IO error writing response message: {0}")]
+    IOError(#[from] io::Error),
+    #[error("Failure in reading client message: {0}")]
+    DeserializationError(#[from] DeserializationError),
+    #[error("Username/password check failed (username was {0})")]
+    FailedUsernamePassword(String),
 }

@@ -17,6 +17,18 @@ pub struct ServerChoice {
 }
 
 impl ServerChoice {
+    pub fn rejection() -> ServerChoice {
+        ServerChoice {
+            chosen_method: AuthenticationMethod::NoAcceptableMethods,
+        }
+    }
+
+    pub fn option(method: AuthenticationMethod) -> ServerChoice {
+        ServerChoice {
+            chosen_method: method,
+        }
+    }
+
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
     ) -> Result<Self, DeserializationError> {

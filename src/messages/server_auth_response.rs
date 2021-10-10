@@ -14,6 +14,14 @@ pub struct ServerAuthResponse {
 }
 
 impl ServerAuthResponse {
+    pub fn success() -> ServerAuthResponse {
+        ServerAuthResponse { success: true }
+    }
+
+    pub fn failure() -> ServerAuthResponse {
+        ServerAuthResponse { success: false }
+    }
+
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
     ) -> Result<Self, DeserializationError> {
