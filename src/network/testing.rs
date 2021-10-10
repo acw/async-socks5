@@ -104,7 +104,7 @@ impl Networklike for TestingStack {
             None => Err(TestStackError::NoTCPHostFound(target, port)),
             Some(result) => {
                 let stream = TestingStream::new(target, port);
-                let retval = stream.clone();
+                let retval = stream.invert();
                 match result.send(stream).await {
                     Ok(()) => Ok(GenericStream::new(retval)),
                     Err(_) => Err(TestStackError::FailureToSend),
@@ -192,11 +192,8 @@ impl Listenerlike for TestListener {
 }
 
 #[test]
-fn check_sanity() {
+fn check_udp_sanity() {
     task::block_on(async {
-        // Technically, this is UDP, and UDP is lossy. We're going to assume we're not
-        // going to get any dropped data along here ... which is a very questionable
-        // assumption, morally speaking, but probably fine for most purposes.
         let mut network = TestingStack::new();
         let receiver = network
             .bind("localhost", 0)
@@ -223,7 +220,10 @@ fn check_sanity() {
         assert_eq!(p, sender_port);
         assert_eq!(recvbuffer, buffer);
     });
+}
 
+#[test]
+fn check_basic_tcp() {
     task::block_on(async {
         let mut network = TestingStack::new();
 

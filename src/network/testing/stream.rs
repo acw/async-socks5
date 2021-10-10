@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct TestingStream {
     address: SOCKSv5Address,
     port: u16,
-    internals: NonNull<TestingStreamData>,
+    read_side: NonNull<TestingStreamData>,
+    write_side: NonNull<TestingStreamData>,
 }
 
 unsafe impl Send for TestingStream {}
@@ -29,28 +30,51 @@ unsafe impl Send for TestingStreamData {}
 unsafe impl Sync for TestingStreamData {}
 
 impl TestingStream {
+    /// Generate a testing stream. Note that this is directional. So, if you want to
+    /// talk to this stream, you should also generate an `invert()` and pass that to
+    /// the other thread(s).
     pub fn new(address: SOCKSv5Address, port: u16) -> TestingStream {
-        let tsd = TestingStreamData {
+        let read_side_data = TestingStreamData {
             lock: AtomicBool::new(false),
             waiters: UnsafeCell::new(Vec::new()),
             buffer: UnsafeCell::new(Vec::with_capacity(16 * 1024)),
         };
 
-        let boxed_tsd = Box::new(tsd);
-        let raw_ptr = Box::leak(boxed_tsd);
+        let write_side_data = TestingStreamData {
+            lock: AtomicBool::new(false),
+            waiters: UnsafeCell::new(Vec::new()),
+            buffer: UnsafeCell::new(Vec::with_capacity(16 * 1024)),
+        };
+
+        let boxed_rsd = Box::new(read_side_data);
+        let boxed_wsd = Box::new(write_side_data);
+        let raw_read_ptr = Box::leak(boxed_rsd);
+        let raw_write_ptr = Box::leak(boxed_wsd);
 
         TestingStream {
             address,
             port,
-            internals: NonNull::new(raw_ptr).unwrap(),
+            read_side: NonNull::new(raw_read_ptr).unwrap(),
+            write_side: NonNull::new(raw_write_ptr).unwrap(),
         }
     }
 
-    pub fn acquire_lock(&mut self) {
-        loop {
-            let internals = unsafe { self.internals.as_mut() };
+    /// Get the flip side of this stream; reads from the inverted side will catch the writes
+    /// of the original, etc.
+    pub fn invert(&self) -> TestingStream {
+        TestingStream {
+            address: self.address.clone(),
+            port: self.port,
+            read_side: self.write_side.clone(),
+            write_side: self.read_side.clone(),
+        }
+    }
+}
 
-            match internals
+impl TestingStreamData {
+    fn acquire(&mut self) {
+        loop {
+            match self
                 .lock
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             {
@@ -60,9 +84,8 @@ impl TestingStream {
         }
     }
 
-    pub fn release_lock(&mut self) {
-        let internals = unsafe { self.internals.as_mut() };
-        internals.lock.store(false, Ordering::SeqCst);
+    fn release(&mut self) {
+        self.lock.store(false, Ordering::SeqCst);
     }
 }
 
@@ -81,17 +104,16 @@ impl Read for TestingStream {
         // so, we're going to spin here, which is less than ideal but should work fine
         // in practice. we'll obviously need to be very careful to ensure that we keep
         // the stuff internal to this spin really short.
-        self.acquire_lock();
+        let internals = unsafe { self.read_side.as_mut() };
 
-        let internals = unsafe { self.internals.as_mut() };
+        internals.acquire();
         let stream_buffer = internals.buffer.get_mut();
-
         let amount_available = stream_buffer.len();
 
         if amount_available == 0 {
             let waker = cx.waker().clone();
             internals.waiters.get_mut().push(waker);
-            self.release_lock();
+            internals.release();
             return Poll::Pending;
         }
 
@@ -108,7 +130,7 @@ impl Read for TestingStream {
             amt_to_copy
         };
 
-        self.release_lock();
+        internals.release();
 
         Poll::Ready(Ok(amt_written))
     }
@@ -120,15 +142,14 @@ impl Write for TestingStream {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.acquire_lock();
-        let internals = unsafe { self.internals.as_mut() };
+        let internals = unsafe { self.write_side.as_mut() };
+        internals.acquire();
         let stream_buffer = internals.buffer.get_mut();
-
         stream_buffer.extend_from_slice(buf);
         for waiter in internals.waiters.get_mut().drain(0..) {
             waiter.wake();
         }
-        self.release_lock();
+        internals.release();
 
         Poll::Ready(Ok(buf.len()))
     }
