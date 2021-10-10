@@ -53,8 +53,8 @@ impl LoginInfo {
 }
 
 pub struct UsernamePassword {
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
 }
 
 impl<S, N> SOCKSv5Client<S, N>
