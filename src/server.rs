@@ -102,6 +102,7 @@ impl<N: Networklike + Send + 'static> SOCKSv5Server<N> {
     }
 }
 
+#[allow(clippy::upper_case_acronyms)]
 enum ChosenMethod {
     TLS(fn(GenericStream) -> Option<GenericStream>),
     Password(fn(&str, &str) -> bool),

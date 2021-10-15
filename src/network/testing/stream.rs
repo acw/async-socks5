@@ -65,8 +65,8 @@ impl TestingStream {
         TestingStream {
             address: self.address.clone(),
             port: self.port,
-            read_side: self.write_side.clone(),
-            write_side: self.read_side.clone(),
+            read_side: self.write_side,
+            write_side: self.read_side,
         }
     }
 }
