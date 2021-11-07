@@ -1,10 +1,15 @@
 use crate::errors::{DeserializationError, SerializationError};
 use crate::messages::{
-    AuthenticationMethod, ClientGreeting, ClientUsernamePassword, ServerAuthResponse, ServerChoice,
-    ServerResponseStatus,
+    AuthenticationMethod, ClientConnectionCommand, ClientConnectionRequest, ClientGreeting,
+    ClientUsernamePassword, ServerAuthResponse, ServerChoice, ServerResponse, ServerResponseStatus,
 };
+use crate::network::datagram::GenericDatagramSocket;
 use crate::network::generic::Networklike;
+use crate::network::listener::GenericListener;
+use crate::network::stream::GenericStream;
+use crate::network::SOCKSv5Address;
 use async_std::io;
+use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncWrite};
 use log::{trace, warn};
 use thiserror::Error;
@@ -27,13 +32,22 @@ pub enum SOCKSv5Error {
     ConnectionError(#[from] io::Error),
 }
 
+impl From<SOCKSv5Error> for ServerResponseStatus {
+    fn from(x: SOCKSv5Error) -> Self {
+        match x {
+            SOCKSv5Error::ServerFailure(v) => v,
+            _ => ServerResponseStatus::GeneralFailure,
+        }
+    }
+}
+
 pub struct SOCKSv5Client<S, N>
 where
-    S: AsyncRead + AsyncWrite,
-    N: Networklike,
+    S: AsyncRead + AsyncWrite + Sync,
+    N: Networklike + Sync,
 {
-    _network: N,
-    _stream: S,
+    network: N,
+    stream: S,
 }
 
 pub struct LoginInfo {
@@ -62,12 +76,12 @@ pub struct UsernamePassword {
 
 impl<S, N> SOCKSv5Client<S, N>
 where
-    S: AsyncRead + AsyncWrite + Send + Unpin,
-    N: Networklike,
+    S: AsyncRead + AsyncWrite + Send + Unpin + Sync,
+    N: Networklike + Sync,
 {
     /// Create a new SOCKSv5 client connection over the given steam, using the given
     /// authentication information.
-    pub async fn new(_network: N, mut stream: S, login: &LoginInfo) -> Result<Self, SOCKSv5Error> {
+    pub async fn new(network: N, mut stream: S, login: &LoginInfo) -> Result<Self, SOCKSv5Error> {
         let acceptable_methods = login.acceptable_methods();
         trace!(
             "Computed acceptable methods -- {:?} -- sending client greeting.",
@@ -113,8 +127,63 @@ where
 
         trace!("Returning new SOCKSv5Client object!");
         Ok(SOCKSv5Client {
-            _network,
-            _stream: stream,
+            network,
+            stream,
         })
+    }
+}
+
+#[async_trait]
+impl<S, N> Networklike for SOCKSv5Client<S, N>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + Sync,
+    N: Networklike + Sync + Send,
+{
+    type Error = SOCKSv5Error;
+
+    async fn connect<A: Send + Into<SOCKSv5Address>>(
+        &mut self,
+        addr: A,
+        port: u16,
+    ) -> Result<GenericStream, Self::Error> {
+        let request = ClientConnectionRequest {
+            command_code: ClientConnectionCommand::EstablishTCPStream,
+            destination_address: addr.into(),
+            destination_port: port,
+        };
+
+        request.write(&mut self.stream).await?;
+
+        let response = ServerResponse::read(&mut self.stream).await?;
+
+        if response.status == ServerResponseStatus::RequestGranted {
+            self.network
+                .connect(response.bound_address, response.bound_port)
+                .await
+                .map_err(|e| {
+                    SOCKSv5Error::ConnectionError(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("{}", e),
+                    ))
+                })
+        } else {
+            Err(SOCKSv5Error::ServerFailure(response.status))
+        }
+    }
+
+    async fn listen<A: Send + Into<SOCKSv5Address>>(
+        &mut self,
+        _addr: A,
+        _port: u16,
+    ) -> Result<GenericListener<Self::Error>, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn bind<A: Send + Into<SOCKSv5Address>>(
+        &mut self,
+        _addr: A,
+        _port: u16,
+    ) -> Result<GenericDatagramSocket<Self::Error>, Self::Error> {
+        unimplemented!()
     }
 }
