@@ -85,7 +85,7 @@ impl<N: Networklike + Send + 'static> SOCKSv5Server<N> {
             let params = self.security_parameters.clone();
             let network_mutex_copy = locked_network.clone();
             task::spawn(async move {
-                match run_authentication(params, stream, their_addr.clone(), their_port).await {
+                match run_authentication(params, stream).await {
                     Ok(authed_stream) => {
                         match run_main_loop(network_mutex_copy, authed_stream).await {
                             Ok(_) => {}
@@ -246,18 +246,7 @@ fn reasonable_auth_method_choices() {
 async fn run_authentication(
     params: SecurityParameters,
     mut stream: GenericStream,
-    addr: SOCKSv5Address,
-    port: u16,
 ) -> Result<GenericStream, AuthenticationError> {
-    // before we do anything at all, we check to see if we just want to blindly reject
-    // this connection, utterly and completely.
-    if let Some(firewall_allows) = params.allow_connection {
-        if !firewall_allows(&addr, port) {
-            return Err(AuthenticationError::FirewallRejected(addr, port));
-        }
-    }
-
-    // OK, I guess we'll listen to you
     let greeting = ClientGreeting::read(&mut stream).await?;
 
     match choose_authentication_method(&params, &greeting.acceptable_methods) {
