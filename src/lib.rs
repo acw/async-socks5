@@ -103,4 +103,28 @@ mod test {
             assert!(client.is_err());
         })
     }
+
+    #[test]
+    fn firewall_blocks() {
+        task::block_on(async {
+            let mut network_stack = TestingStack::default();
+
+            // generate the server
+            let mut security_parameters = SecurityParameters::unrestricted();
+            security_parameters.allow_connection = Some(|_, _| false);
+            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
+            let server =
+                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
+
+            let _server_task = task::spawn(async move { server.run().await });
+
+            let stream = network_stack.connect("localhost", 9999).await.unwrap();
+            let login_info = LoginInfo {
+                username_password: None,
+            };
+            let client = SOCKSv5Client::new(network_stack, stream, &login_info).await;
+
+            assert!(client.is_err());
+        })
+    }
 }

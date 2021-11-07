@@ -4,6 +4,7 @@ use crate::messages::{
     ServerResponseStatus,
 };
 use crate::network::generic::Networklike;
+use async_std::io;
 use futures::io::{AsyncRead, AsyncWrite};
 use log::{trace, warn};
 use thiserror::Error;
@@ -22,6 +23,8 @@ pub enum SOCKSv5Error {
     UnsupportedAuthMethodChosen(AuthenticationMethod),
     #[error("Server said no: {0}")]
     ServerFailure(#[from] ServerResponseStatus),
+    #[error("Connection error: {0}")]
+    ConnectionError(#[from] io::Error),
 }
 
 pub struct SOCKSv5Client<S, N>
