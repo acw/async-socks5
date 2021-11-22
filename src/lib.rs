@@ -19,21 +19,17 @@ mod test {
     #[test]
     fn unrestricted_login() {
         task::block_on(async {
-            let mut network_stack = TestingStack::default();
+            let network_stack = TestingStack::default();
 
             // generate the server
             let security_parameters = SecurityParameters::unrestricted();
-            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
-            let server =
-                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9999).await.unwrap();
 
-            let _server_task = task::spawn(async move { server.run().await });
-
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: None,
             };
-            let client = SOCKSv5Client::new(network_stack, stream, &login_info).await;
+            let client = SOCKSv5Client::new(network_stack, login_info, "localhost", 9999).await;
 
             assert!(client.is_ok());
         })
@@ -42,22 +38,18 @@ mod test {
     #[test]
     fn disallow_unrestricted() {
         task::block_on(async {
-            let mut network_stack = TestingStack::default();
+            let network_stack = TestingStack::default();
 
             // generate the server
             let mut security_parameters = SecurityParameters::unrestricted();
             security_parameters.allow_unauthenticated = false;
-            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
-            let server =
-                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9998).await.unwrap();
 
-            let _server_task = task::spawn(async move { server.run().await });
-
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: None,
             };
-            let client = SOCKSv5Client::new(network_stack, stream, &login_info).await;
+            let client = SOCKSv5Client::new(network_stack, login_info, "localhost", 9998).await;
 
             assert!(client.is_err());
         })
@@ -66,7 +58,7 @@ mod test {
     #[test]
     fn password_checks() {
         task::block_on(async {
-            let mut network_stack = TestingStack::default();
+            let network_stack = TestingStack::default();
 
             // generate the server
             let security_parameters = SecurityParameters {
@@ -77,32 +69,28 @@ mod test {
                     username == "awick" && password == "password"
                 }),
             };
-            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
-            let server =
-                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
-
-            let _server_task = task::spawn(async move { server.run().await });
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9997).await.unwrap();
 
             // try the positive side
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: Some(UsernamePassword {
                     username: "awick".to_string(),
                     password: "password".to_string(),
                 }),
             };
-            let client = SOCKSv5Client::new(network_stack.clone(), stream, &login_info).await;
+            let client =
+                SOCKSv5Client::new(network_stack.clone(), login_info, "localhost", 9997).await;
             assert!(client.is_ok());
 
             // try the negative side
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: Some(UsernamePassword {
                     username: "adamw".to_string(),
                     password: "password".to_string(),
                 }),
             };
-            let client = SOCKSv5Client::new(network_stack, stream, &login_info).await;
+            let client = SOCKSv5Client::new(network_stack, login_info, "localhost", 9997).await;
             assert!(client.is_err());
         })
     }
@@ -110,22 +98,18 @@ mod test {
     #[test]
     fn firewall_blocks() {
         task::block_on(async {
-            let mut network_stack = TestingStack::default();
+            let network_stack = TestingStack::default();
 
             // generate the server
             let mut security_parameters = SecurityParameters::unrestricted();
             security_parameters.allow_connection = Some(|_, _| false);
-            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
-            let server =
-                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9996).await.unwrap();
 
-            let _server_task = task::spawn(async move { server.run().await });
-
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: None,
             };
-            let client = SOCKSv5Client::new(network_stack, stream, &login_info).await;
+            let client = SOCKSv5Client::new(network_stack, login_info, "localhost", 9996).await;
 
             assert!(client.is_err());
         })
@@ -140,18 +124,14 @@ mod test {
 
             // generate the server
             let security_parameters = SecurityParameters::unrestricted();
-            let default_port = network_stack.listen("localhost", 9999).await.unwrap();
-            let server =
-                SOCKSv5Server::new(network_stack.clone(), security_parameters, default_port);
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9995).await.unwrap();
 
-            let _server_task = task::spawn(async move { server.run().await });
-
-            let stream = network_stack.connect("localhost", 9999).await.unwrap();
             let login_info = LoginInfo {
                 username_password: None,
             };
 
-            let mut client = SOCKSv5Client::new(network_stack, stream, &login_info)
+            let mut client = SOCKSv5Client::new(network_stack, login_info, "localhost", 9995)
                 .await
                 .unwrap();
 
