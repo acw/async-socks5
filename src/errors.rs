@@ -26,6 +26,8 @@ pub enum DeserializationError {
     InvalidClientCommand(u8),
     #[error("Invalid server status {0}; expected 0-8")]
     InvalidServerResponse(u8),
+    #[error("Invalid byte in reserved byte ({0})")]
+    InvalidReservedByte(u8),
 }
 
 #[test]
@@ -85,6 +87,10 @@ impl PartialEq for DeserializationError {
             (
                 &DeserializationError::InvalidServerResponse(a),
                 &DeserializationError::InvalidServerResponse(b),
+            ) => a == b,
+            (
+                &DeserializationError::InvalidReservedByte(a),
+                &DeserializationError::InvalidReservedByte(b),
             ) => a == b,
             (_, _) => false,
         }

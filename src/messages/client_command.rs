@@ -32,9 +32,9 @@ impl ClientConnectionRequest {
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
     ) -> Result<Self, DeserializationError> {
-        let mut buffer = [0; 2];
+        let mut buffer = [0; 3];
 
-        read_amt(r, 2, &mut buffer).await?;
+        read_amt(r, 3, &mut buffer).await?;
 
         if buffer[0] != 5 {
             return Err(DeserializationError::InvalidVersion(5, buffer[0]));
@@ -46,6 +46,10 @@ impl ClientConnectionRequest {
             0x03 => ClientConnectionCommand::AssociateUDPPort,
             x => return Err(DeserializationError::InvalidClientCommand(x)),
         };
+
+        if buffer[2] != 0 {
+            return Err(DeserializationError::InvalidReservedByte(buffer[2]));
+        }
 
         let destination_address = SOCKSv5Address::read(r).await?;
 
@@ -69,7 +73,7 @@ impl ClientConnectionRequest {
             ClientConnectionCommand::AssociateUDPPort => 3,
         };
 
-        w.write_all(&[5, command]).await?;
+        w.write_all(&[5, command, 0]).await?;
         self.destination_address.write(w).await?;
         w.write_all(&[
             (self.destination_port >> 8) as u8,
