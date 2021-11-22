@@ -13,6 +13,9 @@ use async_trait::async_trait;
 use futures::AsyncWriteExt;
 use log::error;
 
+use super::generic::IntoErrorResponse;
+
+#[derive(Clone)]
 pub struct Builtin {}
 
 impl Builtin {
@@ -226,9 +229,9 @@ fn check_sanity() {
     });
 }
 
-impl From<io::Error> for ServerResponseStatus {
-    fn from(e: io::Error) -> ServerResponseStatus {
-        match e.kind() {
+impl IntoErrorResponse for io::Error {
+    fn into_response(&self) -> ServerResponseStatus {
+        match self.kind() {
             io::ErrorKind::ConnectionRefused => ServerResponseStatus::ConnectionRefused,
             io::ErrorKind::NotFound => ServerResponseStatus::HostUnreachable,
             _ => ServerResponseStatus::GeneralFailure,

@@ -6,7 +6,7 @@ use crate::network::address::{HasLocalAddress, SOCKSv5Address};
 #[cfg(test)]
 use crate::network::datagram::Datagramlike;
 use crate::network::datagram::GenericDatagramSocket;
-use crate::network::generic::Networklike;
+use crate::network::generic::{IntoErrorResponse, Networklike};
 use crate::network::listener::{GenericListener, Listenerlike};
 use crate::network::stream::GenericStream;
 use crate::network::testing::datagram::TestDatagram;
@@ -82,8 +82,8 @@ impl fmt::Display for TestStackError {
     }
 }
 
-impl From<TestStackError> for ServerResponseStatus {
-    fn from(_: TestStackError) -> Self {
+impl IntoErrorResponse for TestStackError {
+    fn into_response(&self) -> ServerResponseStatus {
         ServerResponseStatus::GeneralFailure
     }
 }

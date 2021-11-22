@@ -1,4 +1,5 @@
 use crate::errors::{DeserializationError, SerializationError};
+use crate::network::generic::IntoErrorResponse;
 use crate::network::SOCKSv5Address;
 use crate::serialize::read_amt;
 use crate::standard_roundtrip;
@@ -37,6 +38,12 @@ pub enum ServerResponseStatus {
     AddressTypeNotSupported,
 }
 
+impl IntoErrorResponse for ServerResponseStatus {
+    fn into_response(&self) -> ServerResponseStatus {
+        self.clone()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServerResponse {
     pub status: ServerResponseStatus,
@@ -45,9 +52,9 @@ pub struct ServerResponse {
 }
 
 impl ServerResponse {
-    pub fn error<E: Into<ServerResponseStatus>>(resp: E) -> ServerResponse {
+    pub fn error<E: IntoErrorResponse>(resp: &E) -> ServerResponse {
         ServerResponse {
-            status: resp.into(),
+            status: resp.into_response(),
             bound_address: SOCKSv5Address::IP4(Ipv4Addr::new(0, 0, 0, 0)),
             bound_port: 0,
         }
@@ -189,7 +196,7 @@ fn check_bad_command() {
 #[test]
 fn short_write_fails_right() {
     let mut buffer = [0u8; 2];
-    let cmd = ServerResponse::error(ServerResponseStatus::AddressTypeNotSupported);
+    let cmd = ServerResponse::error(&ServerResponseStatus::AddressTypeNotSupported);
     let mut cursor = Cursor::new(&mut buffer as &mut [u8]);
     let result = task::block_on(cmd.write(&mut cursor));
     match result {
