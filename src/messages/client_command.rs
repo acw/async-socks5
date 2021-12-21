@@ -9,6 +9,7 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use log::debug;
 #[cfg(test)]
 use quickcheck::{quickcheck, Arbitrary, Gen};
 #[cfg(test)]
@@ -34,8 +35,9 @@ impl ClientConnectionRequest {
     ) -> Result<Self, DeserializationError> {
         let mut buffer = [0; 3];
 
+        debug!("Starting to read request.");
         read_amt(r, 3, &mut buffer).await?;
-
+        debug!("Read three opening bytes: {:?}", buffer);
         if buffer[0] != 5 {
             return Err(DeserializationError::InvalidVersion(5, buffer[0]));
         }
@@ -46,15 +48,18 @@ impl ClientConnectionRequest {
             0x03 => ClientConnectionCommand::AssociateUDPPort,
             x => return Err(DeserializationError::InvalidClientCommand(x)),
         };
+        debug!("Command code: {:?}", command_code);
 
         if buffer[2] != 0 {
             return Err(DeserializationError::InvalidReservedByte(buffer[2]));
         }
 
         let destination_address = SOCKSv5Address::read(r).await?;
+        debug!("Destination address: {}", destination_address);
 
         read_amt(r, 2, &mut buffer).await?;
         let destination_port = ((buffer[0] as u16) << 8) + (buffer[1] as u16);
+        debug!("Destination port: {}", destination_port);
 
         Ok(ClientConnectionRequest {
             command_code,

@@ -12,6 +12,7 @@ mod test {
     use crate::network::listener::Listenerlike;
     use crate::network::testing::TestingStack;
     use crate::server::{SOCKSv5Server, SecurityParameters};
+    use async_std::channel::bounded;
     use async_std::io::prelude::WriteExt;
     use async_std::task;
     use futures::AsyncReadExt;
@@ -147,6 +148,45 @@ mod test {
                 .await
                 .unwrap();
             assert_eq!(read_buffer, [1, 3, 3, 7]);
+        })
+    }
+
+    #[test]
+    fn bind_test() {
+        task::block_on(async {
+            let mut network_stack = TestingStack::default();
+
+            let security_parameters = SecurityParameters::unrestricted();
+            let server = SOCKSv5Server::new(network_stack.clone(), security_parameters);
+            server.start("localhost", 9994).await.unwrap();
+
+            let login_info = LoginInfo::default();
+            let client = SOCKSv5Client::new(network_stack.clone(), login_info, "localhost", 9994)
+                .await
+                .unwrap();
+
+            let (target_sender, target_receiver) = bounded(1);
+
+            task::spawn(async move {
+                let (_, _, mut conn) = client
+                    .remote_listen("localhost", 9993, |addr, port| async move {
+                        target_sender.send((addr, port)).await.unwrap();
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
+
+                conn.write_all(&[2, 3, 5, 7]).await.unwrap();
+            });
+
+            let (target_addr, target_port) = target_receiver.recv().await.unwrap();
+            let mut stream = network_stack
+                .connect(target_addr, target_port)
+                .await
+                .unwrap();
+            let mut read_buffer = [0; 4];
+            stream.read_exact(&mut read_buffer).await.unwrap();
+            assert_eq!(read_buffer, [2, 3, 5, 7]);
         })
     }
 }

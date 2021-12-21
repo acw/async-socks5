@@ -11,6 +11,7 @@ use crate::network::SOCKSv5Address;
 use async_std::io;
 use async_std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use futures::Future;
 use log::{info, trace, warn};
 use std::fmt::{Debug, Display};
 use thiserror::Error;
@@ -55,7 +56,20 @@ pub struct LoginInfo {
     pub username_password: Option<UsernamePassword>,
 }
 
+impl Default for LoginInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LoginInfo {
+    /// Generate an empty bit of login information.
+    fn new() -> LoginInfo {
+        LoginInfo {
+            username_password: None,
+        }
+    }
+
     /// Turn this information into a list of authentication methods that we can handle,
     /// to send to the server. The RFC isn't super clear if the order of these matters
     /// at all, but we'll try to keep it in our preferred order.
@@ -179,15 +193,52 @@ where
     /// person to listen on. So this function takes an async function, which it
     /// will pass this information to once it has it. It's up to that function,
     /// then, to communicate this to its peer.
-    pub async fn remote_listen<A, E: Debug + Display>(
+    pub async fn remote_listen<A, Fut: Future<Output = Result<(), SOCKSv5Error<N::Error>>>>(
         self,
-        _addr: A,
-        _port: u16,
-    ) -> Result<GenericStream, SOCKSv5Error<E>>
+        addr: A,
+        port: u16,
+        callback: impl FnOnce(SOCKSv5Address, u16) -> Fut,
+    ) -> Result<(SOCKSv5Address, u16, GenericStream), SOCKSv5Error<N::Error>>
     where
         A: Into<SOCKSv5Address>,
     {
-        unimplemented!()
+        let mut stream = self.start_session().await?;
+        let target = addr.into();
+        let ccr = ClientConnectionRequest {
+            command_code: ClientConnectionCommand::EstablishTCPPortBinding,
+            destination_address: target.clone(),
+            destination_port: port,
+        };
+
+        ccr.write(&mut stream).await?;
+
+        let initial_response = ServerResponse::read(&mut stream).await?;
+        if initial_response.status != ServerResponseStatus::RequestGranted {
+            return Err(initial_response.status.into());
+        }
+
+        info!(
+            "Proxy port binding of {}:{} established; server listening on {}:{}",
+            target, port, initial_response.bound_address, initial_response.bound_port
+        );
+
+        callback(initial_response.bound_address, initial_response.bound_port).await?;
+
+        let secondary_response = ServerResponse::read(&mut stream).await?;
+        if secondary_response.status != ServerResponseStatus::RequestGranted {
+            return Err(secondary_response.status.into());
+        }
+
+        info!(
+            "Proxy bind got a connection from {}:{}",
+            secondary_response.bound_address, secondary_response.bound_port
+        );
+
+        Ok((
+            secondary_response.bound_address,
+            secondary_response.bound_port,
+            stream,
+        ))
     }
 }
 

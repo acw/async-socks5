@@ -360,47 +360,20 @@ impl<N: Networklike + Clone + Send + 'static> SOCKSv5Server<N> {
         };
         response.write(&mut stream).await?;
 
-        // Now that we've informed them of that, we set up one task to transfer information
-        // from the current stream (`stream`) to the connection (`outgoing_stream`), and
-        // another task that goes in the reverse direction.
-        //
-        // I've chosen to start two fresh tasks and let this one die; I'm not sure that
-        // this is the right approach. My only rationale is that this might let some
-        // memory we might have accumulated along the way drop more easily, but that
-        // might not actually matter.
-        let mut from_left = stream.clone();
-        let mut from_right = outgoing_stream.clone();
-        let mut to_left = stream;
-        let mut to_right = outgoing_stream;
-        let from = format!("{}:{}", their_addr, their_port);
-        let to = format!("{}:{}", ccr.destination_address, ccr.destination_port);
-
-        task::spawn(async move {
-            info!(
-                "Spawned {}:{} >--> {}:{} task",
-                their_addr, their_port, ccr.destination_address, ccr.destination_port
-            );
-            if let Err(e) = io::copy(&mut from_left, &mut to_right).await {
-                warn!(
-                    "{}:{} >--> {}:{} connection failed with: {}",
-                    their_addr, their_port, ccr.destination_address, ccr.destination_port, e
-                );
-            }
-        });
-
-        task::spawn(async move {
-            info!("Spawned {} <--< {} task", from, to);
-            if let Err(e) = io::copy(&mut from_right, &mut to_left).await {
-                warn!("{} <--< {} connection failed with: {}", from, to, e);
-            }
-        });
-
+        // so now tie our streams together, and we're good to go
+        tie_streams(
+            format!("{}:{}", their_addr, their_port),
+            stream,
+            format!("{}:{}", ccr.destination_address, ccr.destination_port),
+            outgoing_stream,
+        )
+        .await;
         Ok(())
     }
 
     async fn handle_tcp_bind(
         self,
-        stream: GenericStream,
+        mut stream: GenericStream,
         ccr: ClientConnectionRequest,
         their_addr: SOCKSv5Address,
         their_port: u16,
@@ -408,12 +381,83 @@ impl<N: Networklike + Clone + Send + 'static> SOCKSv5Server<N> {
         // Let the user know that we're maybe making progress
         let (my_addr, my_port) = stream.local_addr();
         info!(
-            "[{}:{}] Handling UDP bind request from {}:{}, seeking to bind {}:{}",
+            "[{}:{}] Handling TCP bind request from {}:{}, seeking to bind {}:{}",
             my_addr, my_port, their_addr, their_port, ccr.destination_address, ccr.destination_port
         );
 
-        unimplemented!()
+        // OK, we have to bind the darn socket first.
+        let port_binding = {
+            let mut network = self.network.lock().await;
+            network.listen(their_addr.clone(), their_port).await
+        }
+        .map_err(ServerError::NetworkError)?;
+
+        // Tell them what we bound, just in case they want to inform anyone.
+        let (bound_address, bound_port) = port_binding.local_addr();
+        let response = ServerResponse {
+            status: ServerResponseStatus::RequestGranted,
+            bound_address,
+            bound_port,
+        };
+        response.write(&mut stream).await?;
+
+        // Wait politely for someone to talk to us.
+        let (other, other_addr, other_port) = port_binding
+            .accept()
+            .await
+            .map_err(ServerError::NetworkError)?;
+        let info = ServerResponse {
+            status: ServerResponseStatus::RequestGranted,
+            bound_address: other_addr.clone(),
+            bound_port: other_port,
+        };
+        info.write(&mut stream).await?;
+
+        tie_streams(
+            format!("{}:{}", their_addr, their_port),
+            stream,
+            format!("{}:{}", other_addr, other_port),
+            other,
+        )
+        .await;
+        Ok(())
     }
+}
+
+async fn tie_streams(
+    left_name: String,
+    left: GenericStream,
+    right_name: String,
+    right: GenericStream,
+) {
+    // Now that we've informed them of that, we set up one task to transfer information
+    // from the current stream (`stream`) to the connection (`outgoing_stream`), and
+    // another task that goes in the reverse direction.
+    //
+    // I've chosen to start two fresh tasks and let this one die; I'm not sure that
+    // this is the right approach. My only rationale is that this might let some
+    // memory we might have accumulated along the way drop more easily, but that
+    // might not actually matter.
+    let mut from_left = left.clone();
+    let mut from_right = right.clone();
+    let mut to_left = left;
+    let mut to_right = right;
+    let left_right_name = format!("{} >--> {}", left_name, right_name);
+    let right_left_name = format!("{} <--< {}", left_name, right_name);
+
+    task::spawn(async move {
+        info!("Spawned {} task", left_right_name);
+        if let Err(e) = io::copy(&mut from_left, &mut to_right).await {
+            warn!("{} connection failed with: {}", left_right_name, e);
+        }
+    });
+
+    task::spawn(async move {
+        info!("Spawned {} task", right_left_name);
+        if let Err(e) = io::copy(&mut from_right, &mut to_left).await {
+            warn!("{} connection failed with: {}", right_left_name, e);
+        }
+    });
 }
 
 #[allow(clippy::upper_case_acronyms)]
