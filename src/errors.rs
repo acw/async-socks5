@@ -32,29 +32,46 @@ pub enum DeserializationError {
 
 #[test]
 fn des_error_reasonable_equals() {
-    let invalid_version = DeserializationError::InvalidVersion(1, 2);
-    assert_eq!(invalid_version, invalid_version);
-    let not_enough = DeserializationError::NotEnoughData;
-    assert_eq!(not_enough, not_enough);
-    let invalid_empty = DeserializationError::InvalidEmptyString;
-    assert_eq!(invalid_empty, invalid_empty);
-    let auth_method = DeserializationError::AuthenticationMethodError(
+    let invalid_version1 = DeserializationError::InvalidVersion(1, 2);
+    let invalid_version2 = DeserializationError::InvalidVersion(1, 2);
+    assert_eq!(invalid_version1, invalid_version2);
+
+    let not_enough1 = DeserializationError::NotEnoughData;
+    let not_enough2 = DeserializationError::NotEnoughData;
+    assert_eq!(not_enough1, not_enough2);
+
+    let invalid_empty1 = DeserializationError::InvalidEmptyString;
+    let invalid_empty2 = DeserializationError::InvalidEmptyString;
+    assert_eq!(invalid_empty1, invalid_empty2);
+
+    let auth_method1 = DeserializationError::AuthenticationMethodError(
         AuthenticationDeserializationError::NoDataFound,
     );
-    assert_eq!(auth_method, auth_method);
-    let utf8 = DeserializationError::UTF8Error(String::from_utf8(vec![0, 159]).unwrap_err());
-    assert_eq!(utf8, utf8);
-    let invalid_address = DeserializationError::InvalidAddressType(3);
-    assert_eq!(invalid_address, invalid_address);
-    let invalid_client_cmd = DeserializationError::InvalidClientCommand(32);
-    assert_eq!(invalid_client_cmd, invalid_client_cmd);
-    let invalid_server_resp = DeserializationError::InvalidServerResponse(42);
-    assert_eq!(invalid_server_resp, invalid_server_resp);
+    let auth_method2 = DeserializationError::AuthenticationMethodError(
+        AuthenticationDeserializationError::NoDataFound,
+    );
+    assert_eq!(auth_method1, auth_method2);
 
-    assert_ne!(invalid_version, invalid_address);
-    assert_ne!(not_enough, invalid_empty);
-    assert_ne!(auth_method, invalid_client_cmd);
-    assert_ne!(utf8, invalid_server_resp);
+    let utf8a = DeserializationError::UTF8Error(String::from_utf8(vec![0, 159]).unwrap_err());
+    let utf8b = DeserializationError::UTF8Error(String::from_utf8(vec![0, 159]).unwrap_err());
+    assert_eq!(utf8a, utf8b);
+
+    let invalid_address1 = DeserializationError::InvalidAddressType(3);
+    let invalid_address2 = DeserializationError::InvalidAddressType(3);
+    assert_eq!(invalid_address1, invalid_address2);
+
+    let invalid_client_cmd1 = DeserializationError::InvalidClientCommand(32);
+    let invalid_client_cmd2 = DeserializationError::InvalidClientCommand(32);
+    assert_eq!(invalid_client_cmd1, invalid_client_cmd2);
+
+    let invalid_server_resp1 = DeserializationError::InvalidServerResponse(42);
+    let invalid_server_resp2 = DeserializationError::InvalidServerResponse(42);
+    assert_eq!(invalid_server_resp1, invalid_server_resp2);
+
+    assert_ne!(invalid_version1, invalid_address1);
+    assert_ne!(not_enough1, invalid_empty1);
+    assert_ne!(auth_method1, invalid_client_cmd1);
+    assert_ne!(utf8a, invalid_server_resp1);
 }
 
 impl PartialEq for DeserializationError {
@@ -113,12 +130,15 @@ pub enum SerializationError {
 
 #[test]
 fn ser_err_reasonable_equals() {
-    let too_many = SerializationError::TooManyAuthMethods(512);
-    assert_eq!(too_many, too_many);
-    let invalid_str = SerializationError::InvalidStringLength("Whoopsy!".to_string());
-    assert_eq!(invalid_str, invalid_str);
+    let too_many1 = SerializationError::TooManyAuthMethods(512);
+    let too_many2 = SerializationError::TooManyAuthMethods(512);
+    assert_eq!(too_many1, too_many2);
 
-    assert_ne!(too_many, invalid_str);
+    let invalid_str1 = SerializationError::InvalidStringLength("Whoopsy!".to_string());
+    let invalid_str2 = SerializationError::InvalidStringLength("Whoopsy!".to_string());
+    assert_eq!(invalid_str1, invalid_str2);
+
+    assert_ne!(too_many1, invalid_str1);
 }
 
 impl PartialEq for SerializationError {
@@ -149,12 +169,15 @@ pub enum AuthenticationDeserializationError {
 
 #[test]
 fn auth_des_err_reasonable_equals() {
-    let no_data = AuthenticationDeserializationError::NoDataFound;
-    assert_eq!(no_data, no_data);
-    let invalid_auth = AuthenticationDeserializationError::InvalidAuthenticationByte(39);
-    assert_eq!(invalid_auth, invalid_auth);
+    let no_data1 = AuthenticationDeserializationError::NoDataFound;
+    let no_data2 = AuthenticationDeserializationError::NoDataFound;
+    assert_eq!(no_data1, no_data2);
 
-    assert_ne!(no_data, invalid_auth);
+    let invalid_auth1 = AuthenticationDeserializationError::InvalidAuthenticationByte(39);
+    let invalid_auth2 = AuthenticationDeserializationError::InvalidAuthenticationByte(39);
+    assert_eq!(invalid_auth1, invalid_auth2);
+
+    assert_ne!(no_data1, invalid_auth1);
 }
 
 impl PartialEq for AuthenticationDeserializationError {
