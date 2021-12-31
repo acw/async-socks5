@@ -9,7 +9,7 @@ pub fn arbitrary_socks_string(g: &mut Gen) -> String {
         potential.truncate(255);
         let bytestring = potential.as_bytes();
 
-        if bytestring.len() > 0 && bytestring.len() < 256 {
+        if !bytestring.is_empty() && bytestring.len() < 256 {
             return potential;
         }
     }

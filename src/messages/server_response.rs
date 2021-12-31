@@ -200,8 +200,8 @@ fn short_write_fails_right() {
     let mut cursor = Cursor::new(&mut buffer as &mut [u8]);
     let result = task::block_on(cmd.write(&mut cursor));
     match result {
-        Ok(_) => assert!(false, "Mysteriously able to fit > 2 bytes in 2 bytes."),
+        Ok(_) => panic!("Mysteriously able to fit > 2 bytes in 2 bytes."),
         Err(SerializationError::IOError(x)) => assert_eq!(ErrorKind::WriteZero, x.kind()),
-        Err(e) => assert!(false, "Got the wrong error writing too much data: {}", e),
+        Err(e) => panic!("Got the wrong error writing too much data: {}", e),
     }
 }

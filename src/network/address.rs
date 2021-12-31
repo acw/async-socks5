@@ -195,27 +195,27 @@ quickcheck! {
         match x {
             IpAddr::V4(ref a) =>
                 assert_eq!(Err(AddressConversionError::CouldntConvertIP4),
-                           Ipv6Addr::try_from(SOCKSv5Address::from(a.clone()))),
+                           Ipv6Addr::try_from(SOCKSv5Address::from(*a))),
             IpAddr::V6(ref a) =>
                 assert_eq!(Err(AddressConversionError::CouldntConvertIP6),
-                           Ipv4Addr::try_from(SOCKSv5Address::from(a.clone()))),
+                           Ipv4Addr::try_from(SOCKSv5Address::from(*a))),
         }
-        x == IpAddr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+        x == IpAddr::try_from(SOCKSv5Address::from(x)).unwrap()
     }
 
     fn ip4_conversion(x: Ipv4Addr) -> bool {
-        x == Ipv4Addr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+        x == Ipv4Addr::try_from(SOCKSv5Address::from(x)).unwrap()
     }
 
     fn ip6_conversion(x: Ipv6Addr) -> bool {
-        x == Ipv6Addr::try_from(SOCKSv5Address::from(x.clone())).unwrap()
+        x == Ipv6Addr::try_from(SOCKSv5Address::from(x)).unwrap()
     }
 
     fn display_matches(x: SOCKSv5Address) -> bool {
         match x {
             SOCKSv5Address::IP4(a) => format!("{}", a) == format!("{}", x),
             SOCKSv5Address::IP6(a) => format!("{}", a) == format!("{}", x),
-            SOCKSv5Address::Name(ref a) => format!("{}", a) == format!("{}", x),
+            SOCKSv5Address::Name(ref a) => *a == x.to_string(),
         }
     }
 
@@ -253,6 +253,6 @@ fn domain_name_sanity() {
     );
     assert_eq!(
         Err(AddressConversionError::CouldntConvertName),
-        Ipv6Addr::try_from(addr1.clone())
+        Ipv6Addr::try_from(addr1)
     );
 }
