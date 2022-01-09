@@ -8,8 +8,9 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest_derive::Arbitrary;
 
 /// Client greetings are the first message sent in a SOCKSv5 session. They
 /// identify that there's a client that wants to talk to a server, and that
@@ -17,6 +18,7 @@ use quickcheck::{quickcheck, Arbitrary, Gen};
 /// said server. (It feels weird that the offer/choice goes this way instead
 /// of the reverse, but whatever.)
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ClientGreeting {
     pub acceptable_methods: Vec<AuthenticationMethod>,
 }
@@ -65,20 +67,6 @@ impl ClientGreeting {
             authmeth.write(w).await?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ClientGreeting {
-    fn arbitrary(g: &mut Gen) -> ClientGreeting {
-        let amt = u8::arbitrary(g);
-        let mut acceptable_methods = Vec::with_capacity(amt as usize);
-
-        for _ in 0..amt {
-            acceptable_methods.push(AuthenticationMethod::arbitrary(g));
-        }
-
-        ClientGreeting { acceptable_methods }
     }
 }
 

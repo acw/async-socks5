@@ -5,10 +5,12 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest_derive::Arbitrary;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ServerAuthResponse {
     pub success: bool,
 }
@@ -52,14 +54,6 @@ impl ServerAuthResponse {
         w.write_all(&[if self.success { 0x00 } else { 0xde }])
             .await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ServerAuthResponse {
-    fn arbitrary(g: &mut Gen) -> ServerAuthResponse {
-        let success = bool::arbitrary(g);
-        ServerAuthResponse { success }
     }
 }
 

@@ -10,12 +10,14 @@ use async_std::task;
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use log::debug;
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest_derive::Arbitrary;
 #[cfg(test)]
 use std::net::Ipv4Addr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum ClientConnectionCommand {
     EstablishTCPStream,
     EstablishTCPPortBinding,
@@ -23,6 +25,7 @@ pub enum ClientConnectionCommand {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ClientConnectionRequest {
     pub command_code: ClientConnectionCommand,
     pub destination_address: SOCKSv5Address,
@@ -86,33 +89,6 @@ impl ClientConnectionRequest {
         ])
         .await
         .map_err(SerializationError::IOError)
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ClientConnectionCommand {
-    fn arbitrary(g: &mut Gen) -> ClientConnectionCommand {
-        let options = [
-            ClientConnectionCommand::EstablishTCPStream,
-            ClientConnectionCommand::EstablishTCPPortBinding,
-            ClientConnectionCommand::AssociateUDPPort,
-        ];
-        *g.choose(&options).unwrap()
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ClientConnectionRequest {
-    fn arbitrary(g: &mut Gen) -> Self {
-        let command_code = ClientConnectionCommand::arbitrary(g);
-        let destination_address = SOCKSv5Address::arbitrary(g);
-        let destination_port = u16::arbitrary(g);
-
-        ClientConnectionRequest {
-            command_code,
-            destination_address,
-            destination_port,
-        }
     }
 }
 

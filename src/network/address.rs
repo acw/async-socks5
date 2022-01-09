@@ -1,6 +1,4 @@
 use crate::errors::{DeserializationError, SerializationError};
-#[cfg(test)]
-use crate::messages::utils::arbitrary_socks_string;
 use crate::serialize::{read_amt, read_string, write_string};
 use crate::standard_roundtrip;
 #[cfg(test)]
@@ -8,8 +6,9 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use proptest::prelude::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy, any, prop_oneof};
 use std::convert::TryFrom;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -20,6 +19,28 @@ pub enum SOCKSv5Address {
     IP4(Ipv4Addr),
     IP6(Ipv6Addr),
     Name(String),
+}
+
+#[cfg(test)]
+const HOSTNAME_REGEX: &str = "[a-zA-Z0-9_.]+";
+
+#[cfg(test)]
+impl Arbitrary for SOCKSv5Address {
+    type Parameters = Option<u16>;
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+        let max_len = args.unwrap_or(32) as usize;
+
+        prop_oneof![
+            any::<Ipv4Addr>().prop_map(SOCKSv5Address::IP4),
+            any::<Ipv6Addr>().prop_map(SOCKSv5Address::IP6),
+            HOSTNAME_REGEX.prop_map(move |mut hostname| {
+                hostname.shrink_to(max_len);
+                SOCKSv5Address::Name(hostname)
+            }),
+        ].boxed()
+    }
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -170,28 +191,11 @@ pub trait HasLocalAddress {
     fn local_addr(&self) -> (SOCKSv5Address, u16);
 }
 
-#[cfg(test)]
-impl Arbitrary for SOCKSv5Address {
-    fn arbitrary(g: &mut Gen) -> Self {
-        let ip4 = Ipv4Addr::arbitrary(g);
-        let ip6 = Ipv6Addr::arbitrary(g);
-        let nm = arbitrary_socks_string(g);
-
-        g.choose(&[
-            SOCKSv5Address::IP4(ip4),
-            SOCKSv5Address::IP6(ip6),
-            SOCKSv5Address::Name(nm),
-        ])
-        .unwrap()
-        .clone()
-    }
-}
-
 standard_roundtrip!(address_roundtrips, SOCKSv5Address);
 
-#[cfg(test)]
-quickcheck! {
-    fn ip_conversion(x: IpAddr) -> bool {
+proptest! {
+    #[test]
+    fn ip_conversion(x: IpAddr) {
         match x {
             IpAddr::V4(ref a) =>
                 assert_eq!(Err(AddressConversionError::CouldntConvertIP4),
@@ -200,35 +204,37 @@ quickcheck! {
                 assert_eq!(Err(AddressConversionError::CouldntConvertIP6),
                            Ipv4Addr::try_from(SOCKSv5Address::from(*a))),
         }
-        x == IpAddr::try_from(SOCKSv5Address::from(x)).unwrap()
+        assert_eq!(x, IpAddr::try_from(SOCKSv5Address::from(x)).unwrap());
     }
 
-    fn ip4_conversion(x: Ipv4Addr) -> bool {
-        x == Ipv4Addr::try_from(SOCKSv5Address::from(x)).unwrap()
+    #[test]
+    fn ip4_conversion(x: Ipv4Addr) {
+        assert_eq!(x, Ipv4Addr::try_from(SOCKSv5Address::from(x)).unwrap());
     }
 
-    fn ip6_conversion(x: Ipv6Addr) -> bool {
-        x == Ipv6Addr::try_from(SOCKSv5Address::from(x)).unwrap()
+    #[test]
+    fn ip6_conversion(x: Ipv6Addr) {
+        assert_eq!(x, Ipv6Addr::try_from(SOCKSv5Address::from(x)).unwrap());
     }
 
-    fn display_matches(x: SOCKSv5Address) -> bool {
+    #[test]
+    fn display_matches(x: SOCKSv5Address) {
         match x {
-            SOCKSv5Address::IP4(a) => format!("{}", a) == format!("{}", x),
-            SOCKSv5Address::IP6(a) => format!("{}", a) == format!("{}", x),
-            SOCKSv5Address::Name(ref a) => *a == x.to_string(),
+            SOCKSv5Address::IP4(a) => assert_eq!(format!("{}", a), format!("{}", x)),
+            SOCKSv5Address::IP6(a) => assert_eq!(format!("{}", a), format!("{}", x)),
+            SOCKSv5Address::Name(ref a) => assert_eq!(*a, x.to_string()),
         }
     }
 
-    fn bad_read_key(x: u8) -> bool {
+    #[test]
+    fn bad_read_key(x: u8) {
         match x {
-            1 => true,
-            3 => true,
-            4 => true,
+            1 | 3 | 4 => {}
             _ => {
                 let buffer = [x, 0, 1, 2, 9, 10];
                 let mut cursor = Cursor::new(buffer);
                 let meh = SOCKSv5Address::read(&mut cursor);
-                Err(DeserializationError::InvalidAddressType(x)) == task::block_on(meh)
+                assert_eq!(Err(DeserializationError::InvalidAddressType(x)), task::block_on(meh));
             }
         }
     }

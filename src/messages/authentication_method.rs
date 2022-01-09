@@ -5,8 +5,11 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest::prelude::{Arbitrary, Just, Strategy, prop_oneof};
+#[cfg(test)]
+use proptest::strategy::BoxedStrategy;
 use std::fmt;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -44,6 +47,31 @@ impl fmt::Display for AuthenticationMethod {
         }
     }
 }
+
+#[cfg(test)]
+impl Arbitrary for AuthenticationMethod {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> BoxedStrategy<Self> {
+        prop_oneof![
+            Just(AuthenticationMethod::None),
+            Just(AuthenticationMethod::GSSAPI),
+            Just(AuthenticationMethod::UsernameAndPassword),
+            Just(AuthenticationMethod::ChallengeHandshake),
+            Just(AuthenticationMethod::ChallengeResponse),
+            Just(AuthenticationMethod::SSL),
+            Just(AuthenticationMethod::NDS),
+            Just(AuthenticationMethod::MultiAuthenticationFramework),
+            Just(AuthenticationMethod::JSONPropertyBlock),
+            Just(AuthenticationMethod::NoAcceptableMethods),
+
+            (0x80u8..=0xfe).prop_map(AuthenticationMethod::PrivateMethod),
+        ].boxed()
+    }
+}
+
+
 
 impl AuthenticationMethod {
     pub async fn read<R: AsyncRead + Send + Unpin>(
@@ -91,28 +119,6 @@ impl AuthenticationMethod {
         };
 
         Ok(w.write_all(&[value]).await?)
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for AuthenticationMethod {
-    fn arbitrary(g: &mut Gen) -> AuthenticationMethod {
-        let mut vals = vec![
-            AuthenticationMethod::None,
-            AuthenticationMethod::GSSAPI,
-            AuthenticationMethod::UsernameAndPassword,
-            AuthenticationMethod::ChallengeHandshake,
-            AuthenticationMethod::ChallengeResponse,
-            AuthenticationMethod::SSL,
-            AuthenticationMethod::NDS,
-            AuthenticationMethod::MultiAuthenticationFramework,
-            AuthenticationMethod::JSONPropertyBlock,
-            AuthenticationMethod::NoAcceptableMethods,
-        ];
-        for x in 0x80..0xffu8 {
-            vals.push(AuthenticationMethod::PrivateMethod(x));
-        }
-        g.choose(&vals).unwrap().clone()
     }
 }
 

@@ -11,12 +11,14 @@ use async_std::task;
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use log::warn;
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest_derive::Arbitrary;
 use std::net::Ipv4Addr;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum ServerResponseStatus {
     #[error("Actually, everything's fine (weird to see this in an error)")]
     RequestGranted,
@@ -45,6 +47,7 @@ impl IntoErrorResponse for ServerResponseStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ServerResponse {
     pub status: ServerResponseStatus,
     pub bound_address: SOCKSv5Address,
@@ -125,39 +128,6 @@ impl ServerResponse {
         ])
         .await
         .map_err(SerializationError::IOError)
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ServerResponseStatus {
-    fn arbitrary(g: &mut Gen) -> ServerResponseStatus {
-        let options = [
-            ServerResponseStatus::RequestGranted,
-            ServerResponseStatus::GeneralFailure,
-            ServerResponseStatus::ConnectionNotAllowedByRule,
-            ServerResponseStatus::NetworkUnreachable,
-            ServerResponseStatus::HostUnreachable,
-            ServerResponseStatus::ConnectionRefused,
-            ServerResponseStatus::TTLExpired,
-            ServerResponseStatus::CommandNotSupported,
-            ServerResponseStatus::AddressTypeNotSupported,
-        ];
-        g.choose(&options).unwrap().clone()
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ServerResponse {
-    fn arbitrary(g: &mut Gen) -> Self {
-        let status = ServerResponseStatus::arbitrary(g);
-        let bound_address = SOCKSv5Address::arbitrary(g);
-        let bound_port = u16::arbitrary(g);
-
-        ServerResponse {
-            status,
-            bound_address,
-            bound_port,
-        }
     }
 }
 

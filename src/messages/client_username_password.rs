@@ -1,6 +1,4 @@
 use crate::errors::{DeserializationError, SerializationError};
-#[cfg(test)]
-use crate::messages::utils::arbitrary_socks_string;
 use crate::serialize::{read_string, write_string};
 use crate::standard_roundtrip;
 #[cfg(test)]
@@ -9,12 +7,35 @@ use async_std::task;
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest::prelude::{Arbitrary, BoxedStrategy};
+use proptest::proptest;
+#[cfg(test)]
+use proptest::strategy::Strategy;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientUsernamePassword {
     pub username: String,
     pub password: String,
+}
+
+#[cfg(test)]
+const USERNAME_REGEX: &str = "[a-zA-Z0-9~!@#$%^&*_\\-+=:;?<>]+";
+#[cfg(test)]
+const PASSWORD_REGEX: &str = "[a-zA-Z0-9~!@#$%^&*_\\-+=:;?<>]+";
+
+#[cfg(test)]
+impl Arbitrary for ClientUsernamePassword {
+    type Parameters = Option<u8>;
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+        let max_len = args.unwrap_or(12) as usize;
+        (USERNAME_REGEX, PASSWORD_REGEX).prop_map(move |(mut username, mut password)| {
+            username.shrink_to(max_len);
+            password.shrink_to(max_len);
+            ClientUsernamePassword { username, password }
+        }).boxed()
+    }
 }
 
 impl ClientUsernamePassword {
@@ -44,16 +65,6 @@ impl ClientUsernamePassword {
         w.write_all(&[1]).await?;
         write_string(&self.username, w).await?;
         write_string(&self.password, w).await
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ClientUsernamePassword {
-    fn arbitrary(g: &mut Gen) -> Self {
-        let username = arbitrary_socks_string(g);
-        let password = arbitrary_socks_string(g);
-
-        ClientUsernamePassword { username, password }
     }
 }
 

@@ -8,10 +8,12 @@ use async_std::task;
 #[cfg(test)]
 use futures::io::Cursor;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use proptest::proptest;
 #[cfg(test)]
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use proptest_derive::Arbitrary;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ServerChoice {
     pub chosen_method: AuthenticationMethod,
 }
@@ -53,15 +55,6 @@ impl ServerChoice {
     ) -> Result<(), SerializationError> {
         w.write_all(&[5]).await?;
         self.chosen_method.write(w).await
-    }
-}
-
-#[cfg(test)]
-impl Arbitrary for ServerChoice {
-    fn arbitrary(g: &mut Gen) -> ServerChoice {
-        ServerChoice {
-            chosen_method: AuthenticationMethod::arbitrary(g),
-        }
     }
 }
 
