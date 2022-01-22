@@ -150,13 +150,13 @@ impl SOCKSv5Address {
                 Ok(SOCKSv5Address::IP4(Ipv4Addr::from(addr_buffer)))
             }
             3 => {
+                let name = read_string(r).await?;
+                Ok(SOCKSv5Address::Name(name))
+            }
+            4 => {
                 let mut addr_buffer = [0; 16];
                 read_amt(r, 16, &mut addr_buffer).await?;
                 Ok(SOCKSv5Address::IP6(Ipv6Addr::from(addr_buffer)))
-            }
-            4 => {
-                let name = read_string(r).await?;
-                Ok(SOCKSv5Address::Name(name))
             }
             x => Err(DeserializationError::InvalidAddressType(x)),
         }
@@ -174,13 +174,13 @@ impl SOCKSv5Address {
                     .map_err(SerializationError::IOError)
             }
             SOCKSv5Address::IP6(x) => {
-                w.write_all(&[3]).await?;
+                w.write_all(&[4]).await?;
                 w.write_all(&x.octets())
                     .await
                     .map_err(SerializationError::IOError)
             }
             SOCKSv5Address::Name(x) => {
-                w.write_all(&[4]).await?;
+                w.write_all(&[3]).await?;
                 write_string(x, w).await
             }
         }
