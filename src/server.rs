@@ -1,157 +1,59 @@
-//! An implementation of a SOCKSv5 server, parameterizable by the security parameters
-//! and network stack you want to use. You should implement the server by first
-//! setting up the `SecurityParameters`, then initializing the server object, and
-//! then running it, as follows:
-//!
-//! ```
-//! use async_socks5::network::Builtin;
-//! use async_socks5::server::{SecurityParameters, SOCKSv5Server};
-//! use std::io;
-//!
-//! async {
-//!     let parameters = SecurityParameters::new()
-//!                                        .password_check(|u,p| { u == "adam" && p == "evil" });
-//!     let network = Builtin::new();
-//!     let server = SOCKSv5Server::new(network, parameters);
-//!     server.start("localhost", 9999).await;
-//!     // ... do other stuff ...
-//! };
-//!
-//! ```
-use crate::errors::{AuthenticationError, DeserializationError, SerializationError};
+use std::net::SocketAddr;
+
+use crate::address::SOCKSv5Address;
 use crate::messages::{
-    AuthenticationMethod, ClientConnectionCommand, ClientConnectionRequest, ClientGreeting,
-    ClientUsernamePassword, ServerAuthResponse, ServerChoice, ServerResponse, ServerResponseStatus,
+    AuthenticationMethod, ClientConnectionCommand, ClientConnectionCommandReadError,
+    ClientConnectionRequest, ClientConnectionRequestReadError, ClientGreeting,
+    ClientGreetingReadError, ClientUsernamePassword, ClientUsernamePasswordReadError,
+    ServerAuthResponse, ServerAuthResponseWriteError, ServerChoice, ServerChoiceWriteError,
+    ServerResponse, ServerResponseStatus, ServerResponseWriteError,
 };
-use crate::network::address::HasLocalAddress;
-use crate::network::generic::Networklike;
-use crate::network::listener::{GenericListener, Listenerlike};
-use crate::network::stream::GenericStream;
-use crate::network::SOCKSv5Address;
-use async_std::io;
-use async_std::io::prelude::WriteExt;
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
-use futures::Stream;
-use log::{error, info, trace, warn};
-use std::collections::HashMap;
-use std::default::Default;
-use std::fmt::{Debug, Display};
+use crate::security_parameters::SecurityParameters;
 use thiserror::Error;
+use tokio::io::{copy_bidirectional, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 
-/// A convenient bit of shorthand for an address and port
-pub type AddressAndPort = (SOCKSv5Address, u16);
-
-// Just some shorthand for us.
-type ResultHandle = task::JoinHandle<Result<(), String>>;
-
-/// A handle representing a SOCKSv5 server, parameterized by the underlying network
-/// stack it runs over.
 #[derive(Clone)]
-pub struct SOCKSv5Server<N: Networklike> {
-    network: Arc<Mutex<N>>,
-    running_servers: Arc<Mutex<HashMap<AddressAndPort, ResultHandle>>>,
+pub struct SOCKSv5Server {
     security_parameters: SecurityParameters,
 }
 
-/// The security parameters that you can assign to the server, to make decisions
-/// about the weirdos it accepts as users. It is recommended that you only use
-/// wide open connections when you're 100% sure that the server will only be
-/// accessible locally.
-#[derive(Clone)]
-pub struct SecurityParameters {
-    /// Allow completely unauthenticated connections. You should be very, very
-    /// careful about setting this to true, especially if you don't provide a
-    /// guard to ensure that you're getting connections from reasonable places.
-    pub allow_unauthenticated: bool,
-    /// An optional function that can serve as a firewall for new connections.
-    /// Return true if the connection should be allowed to continue, false if
-    /// it shouldn't. This check happens before any data is read from or written
-    /// to the connecting party.
-    pub allow_connection: Option<fn(&SOCKSv5Address, u16) -> bool>,
-    /// An optional function to check a user name (first argument) and password
-    /// (second argument). Return true if the username / password is good, false
-    /// if not.
-    pub check_password: Option<fn(&str, &str) -> bool>,
-    /// An optional function to transition the stream from an unencrypted one to
-    /// an encrypted on. The assumption is you're using something like `rustls`
-    /// to make this happen; the exact mechanism is outside the scope of this
-    /// particular crate. If the connection shouldn't be allowed for some reason
-    /// (a bad certificate or handshake, for example), then return None; otherwise,
-    /// return the new stream.
-    pub connect_tls: Option<fn(GenericStream) -> Option<GenericStream>>,
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum SOCKSv5ServerError {
+    #[error("Underlying networking error: {0}")]
+    NetworkingError(String),
+    #[error("Couldn't negotiate authentication with client.")]
+    ItsNotUsItsYou,
+    #[error("Client greeting read problem: {0}")]
+    GreetingReadProblem(#[from] ClientGreetingReadError),
+    #[error("Server choice write problem: {0}")]
+    ChoiceWriteProblem(#[from] ServerChoiceWriteError),
+    #[error("Failed username/password authentication for user {0}")]
+    FailedUsernamePassword(String),
+    #[error("Server authentication response problem: {0}")]
+    ServerAuthWriteProblem(#[from] ServerAuthResponseWriteError),
+    #[error("Error reading client username/password: {0}")]
+    UserPassReadProblem(#[from] ClientUsernamePasswordReadError),
+    #[error("Error reading client connection command: {0}")]
+    ClientConnReadProblem(#[from] ClientConnectionCommandReadError),
+    #[error("Error reading client connection request: {0}")]
+    ClientRequestReadProblem(#[from] ClientConnectionRequestReadError),
+    #[error("Error writing server response: {0}")]
+    ServerResponseWriteProblem(#[from] ServerResponseWriteError),
 }
 
-impl SecurityParameters {
-    /// Generates a `SecurityParameters` object that's empty. It won't accept
-    /// anything, because it has no mechanisms it can use to actually authenticate
-    /// a user and yet won't allow unauthenticated connections.
-    pub fn new() -> SecurityParameters {
-        SecurityParameters {
-            allow_unauthenticated: false,
-            allow_connection: None,
-            check_password: None,
-            connect_tls: None,
-        }
-    }
-
-    /// Generates a `SecurityParameters` object that does not, in any way,
-    /// restrict who can log in. It also will not induce any transition into
-    /// TLS. Use this at your own risk ... or, really, just don't use this,
-    /// ever, and certainly not in production.
-    pub fn unrestricted() -> SecurityParameters {
-        SecurityParameters {
-            allow_unauthenticated: true,
-            allow_connection: None,
-            check_password: None,
-            connect_tls: None,
-        }
-    }
-
-    /// Use the provided function to check incoming connections before proceeding
-    /// with the rest of the handshake.
-    pub fn check_connections(
-        mut self,
-        checker: fn(&SOCKSv5Address, u16) -> bool,
-    ) -> SecurityParameters {
-        self.allow_connection = Some(checker);
-        self
-    }
-
-    /// Use the provided function to check usernames and passwords provided
-    /// to the server.
-    pub fn password_check(mut self, checker: fn(&str, &str) -> bool) -> SecurityParameters {
-        self.check_password = Some(checker);
-        self
-    }
-
-    /// Use the provide function to validate a TLS connection, and transition it
-    /// to the new stream type. If the handshake fails, return `None` instead of
-    /// `Some`. (And maybe log it somewhere, you know.)
-    pub fn tls_converter(
-        mut self,
-        converter: fn(GenericStream) -> Option<GenericStream>,
-    ) -> SecurityParameters {
-        self.connect_tls = Some(converter);
-        self
+impl From<std::io::Error> for SOCKSv5ServerError {
+    fn from(x: std::io::Error) -> SOCKSv5ServerError {
+        SOCKSv5ServerError::NetworkingError(format!("{}", x))
     }
 }
 
-impl Default for SecurityParameters {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<N: Networklike + Clone + Send + 'static> SOCKSv5Server<N> {
-    /// Initialize a SOCKSv5 server for use later on. Once initialize, you can listen on
-    /// as many addresses and ports as you like; the metadata about the server will be
-    /// sync'd across all of the instances, should you want to gather that data for some
-    /// reason.
-    pub fn new(network: N, security_parameters: SecurityParameters) -> SOCKSv5Server<N> {
+impl SOCKSv5Server {
+    /// Initialize a SOCKSv5 server for use later on. Once initialized, you can listen
+    /// on as many addresses and ports as you like; the metadata about the server will
+    /// be synced across all the instances.
+    pub fn new(security_parameters: SecurityParameters) -> Self {
         SOCKSv5Server {
-            network: Arc::new(Mutex::new(network)),
-            running_servers: Arc::new(Mutex::new(HashMap::new())),
             security_parameters,
         }
     }
@@ -159,191 +61,241 @@ impl<N: Networklike + Clone + Send + 'static> SOCKSv5Server<N> {
     /// Start a server on the given address and port. This function returns when it has
     /// set up its listening socket, but spawns a separate task to actually wait for
     /// connections. You can query which ones are still active, or see which ones have
-    /// failed, using some of the other items in this structure.
+    /// failed, using some of the other functions for this structure.
+    ///
+    /// If you don't care what port is assigned to this server, pass 0 in as the port
+    /// number and one will be chosen for you by the OS.
+    ///
     pub async fn start<A: Send + Into<SOCKSv5Address>>(
         &self,
         addr: A,
         port: u16,
-    ) -> Result<(), N::Error> {
-        // This might seem a little weird, but we do this in a separate block to make it
-        // as clear as possible to the borrow checker (and the reader) that we only want
-        // to hold the lock while we're actually calling listen.
-        let listener = {
-            let mut network = self.network.lock().await;
-            network.listen(addr, port).await
-        }?;
+    ) -> Result<(), std::io::Error> {
+        let listener = match addr.into() {
+            SOCKSv5Address::IP4(x) => TcpListener::bind((x, port)).await?,
+            SOCKSv5Address::IP6(x) => TcpListener::bind((x, port)).await?,
+            SOCKSv5Address::Hostname(x) => TcpListener::bind((x, port)).await?,
+        };
 
-        // this should really be the same as the input, but technically they could've
-        // thrown some zeros in there and let the underlying network stack decide. So
-        // we'll just pull this information post-initialization, and maybe get something
-        // a bit more detailed.
-        let (my_addr, my_port) = listener.local_addr();
-        info!("Starting SOCKSv5 server on {}:{}", my_addr, my_port);
+        let sockaddr = listener.local_addr()?;
+        tracing::info!(
+            "Starting SOCKSv5 server on {}:{}",
+            sockaddr.ip(),
+            sockaddr.port()
+        );
 
-        // OK, spawn off the server loop, and then we'll register this in our list of
-        // things running.
-        let new_self = self.clone();
-        let task_id = task::spawn(async move {
-            new_self
-                .server_loop(listener)
-                .await
-                .map_err(|x| format!("Server network error: {}", x))
+        let second_life = self.clone();
+
+        tokio::task::spawn(async move {
+            if let Err(e) = second_life.server_loop(listener).await {
+                tracing::error!(
+                    "{}:{}: server network error: {}",
+                    sockaddr.ip(),
+                    sockaddr.port(),
+                    e
+                );
+            }
         });
-
-        let mut server_map = self.running_servers.lock().await;
-        server_map.insert((my_addr, my_port), task_id);
 
         Ok(())
     }
 
-    /// Provide a list of open sockets on the server.
-    pub async fn open_sockets(&self) -> Vec<AddressAndPort> {
-        let server_map = self.running_servers.lock().await;
-        server_map.keys().cloned().collect()
-    }
-
-    pub fn subserver_results(&mut self) -> impl Stream<Item = Result<(), String>> {
-        futures::stream::unfold(self.running_servers.clone(), |locked_map| async move {
-            let first_server = {
-                let mut server_map = locked_map.lock().await;
-                let first_key = server_map.keys().next().cloned()?;
-
-                server_map.remove(&first_key)
-            }?;
-
-            let result = first_server.await;
-            Some((result, locked_map))
-        })
-    }
-
-    async fn server_loop(self, listener: GenericListener<N::Error>) -> Result<(), N::Error> {
+    /// Run the server loop for a particular listener. This routine will never actually
+    /// return except in error conditions.
+    async fn server_loop(self, listener: TcpListener) -> Result<(), std::io::Error> {
         loop {
-            let (stream, their_addr, their_port) = listener.accept().await?;
-            trace!(
-                "Initial accept of connection from {}:{}",
-                their_addr,
-                their_port
-            );
+            let (socket, their_addr) = listener.accept().await?;
 
-            // before we do anything, make sure this connection is cool. we don't want to
-            // waste resources (or parse any data) if this isn't someone we actually care
-            // about it.
-            if let Some(checker) = &self.security_parameters.allow_connection {
-                if !checker(&their_addr, their_port) {
-                    info!(
-                        "Rejecting attempted connection from {}:{}",
-                        their_addr, their_port
-                    );
-                    continue;
+            // before we do anything of note, make sure this connection is cool. we don't want
+            // to waste any resources (and certainly don't want to handle any data!) if this
+            // isn't someone we want to accept connections from.
+            tracing::trace!("Initial accept of connection from {}", their_addr);
+            if let Some(checker) = self.security_parameters.allow_connection {
+                if !checker(&their_addr) {
+                    tracing::info!("Rejecting attempted connection from {}", their_addr,);
                 }
+                continue;
             }
 
-            // throw this off into another task to take from here. We could to the rest
-            // of this handshake here, but there's a chance that an adversarial connection
-            // could just stall us out, and keep us from doing the next connection. So ...
-            // we'll potentially spin off the task early.
+            // continue this work in another task. we could absolutely do this work here,
+            // but just in case someone starts doing slow responses (or other nasty things),
+            // we want to make sure that that doesn't slow down our ability to accept other
+            // requests.
             let me_again = self.clone();
-            task::spawn(async move {
-                me_again
-                    .authenticate_step(their_addr, their_port, stream)
-                    .await;
+            tokio::task::spawn(async move {
+                if let Err(e) = me_again.start_authentication(their_addr, socket).await {
+                    tracing::error!("{}: server handler failure: {}", their_addr, e);
+                }
             });
         }
     }
 
-    async fn authenticate_step(
+    /// Start the authentication phase of the SOCKS handshake. This may be very short, and
+    /// is the first stage of handling a request. This will only really return on errors.
+    async fn start_authentication(
         self,
-        their_addr: SOCKSv5Address,
-        their_port: u16,
-        base_stream: GenericStream,
-    ) {
-        // Turn this stream into one where we've authenticated the other side. Or, you
-        // know, don't, and just restart this loop.
-        let mut authenticated_stream =
-            match run_authentication(&self.security_parameters, base_stream).await {
-                Ok(authed_stream) => authed_stream,
-                Err(e) => {
-                    warn!(
-                        "Failure running authentication from {}:{}: {}",
-                        their_addr, their_port, e
-                    );
-                    return;
-                }
-            };
+        their_addr: SocketAddr,
+        mut socket: TcpStream,
+    ) -> Result<(), SOCKSv5ServerError> {
+        let greeting = ClientGreeting::read(&mut socket).await?;
 
-        // Figure out what the client actually wants from this connection, and
-        // then dispatch a task to deal with that.
-        let mccr = ClientConnectionRequest::read(&mut authenticated_stream).await;
-        match mccr {
-            Err(e) => warn!("Failure figuring out what the client wanted: {}", e),
-            Ok(ccr) => match ccr.command_code {
-                ClientConnectionCommand::AssociateUDPPort => self
-                    .handle_udp_request(authenticated_stream, ccr, their_addr, their_port)
-                    .await
-                    .unwrap_or_else(|e| warn!("Internal server error in UDP association: {}", e)),
-                ClientConnectionCommand::EstablishTCPPortBinding => self
-                    .handle_tcp_bind(authenticated_stream, ccr, their_addr, their_port)
-                    .await
-                    .unwrap_or_else(|e| warn!("Internal server error in TCP bind: {}", e)),
-                ClientConnectionCommand::EstablishTCPStream => self
-                    .handle_tcp_forward(authenticated_stream, ccr, their_addr, their_port)
-                    .await
-                    .unwrap_or_else(|e| warn!("Internal server error in TCP forward: {}", e)),
-            },
+        match choose_authentication_method(&self.security_parameters, &greeting.acceptable_methods)
+        {
+            // it's not us, it's you. (we're just going to say no.)
+            None => {
+                tracing::trace!(
+                    "{}: Failed to find acceptable authentication method.",
+                    their_addr,
+                );
+                let rejection_letter = ServerChoice::rejection();
+
+                rejection_letter.write(&mut socket).await?;
+                socket.flush().await?;
+
+                Err(SOCKSv5ServerError::ItsNotUsItsYou)
+            }
+
+            // the gold standard. great choice.
+            Some(ChosenMethod::TLS(_converter)) => {
+                unimplemented!()
+            }
+
+            // well, I guess this is something?
+            Some(ChosenMethod::Password(checker)) => {
+                tracing::trace!(
+                    "{}: Choosing username/password for authentication.",
+                    their_addr,
+                );
+                let ok_lets_do_password =
+                    ServerChoice::option(AuthenticationMethod::UsernameAndPassword);
+                ok_lets_do_password.write(&mut socket).await?;
+                socket.flush().await?;
+
+                let their_info = ClientUsernamePassword::read(&mut socket).await?;
+                if checker(&their_info.username, &their_info.password) {
+                    let its_all_good = ServerAuthResponse::success();
+                    its_all_good.write(&mut socket).await?;
+                    socket.flush().await?;
+                    self.choose_mode(socket, their_addr).await
+                } else {
+                    let yeah_no = ServerAuthResponse::failure();
+                    yeah_no.write(&mut socket).await?;
+                    socket.flush().await?;
+                    Err(SOCKSv5ServerError::FailedUsernamePassword(
+                        their_info.username,
+                    ))
+                }
+            }
+
+            // Um. I guess we're doing this unchecked. Yay?
+            Some(ChosenMethod::None) => {
+                tracing::trace!(
+                    "{}: Just skipping the whole authentication thing.",
+                    their_addr,
+                );
+                let nothin_i_guess = ServerChoice::option(AuthenticationMethod::None);
+                nothin_i_guess.write(&mut socket).await?;
+                socket.flush().await?;
+                self.choose_mode(socket, their_addr).await
+            }
         }
     }
 
-    async fn handle_udp_request(
+    /// Determine which of the modes we might want this particular connection to run
+    /// in.
+    async fn choose_mode(
         self,
-        stream: GenericStream,
-        ccr: ClientConnectionRequest,
-        their_addr: SOCKSv5Address,
-        their_port: u16,
-    ) -> Result<(), ServerError<N::Error>> {
-        // Let the user know that we're maybe making progress
-        let (my_addr, my_port) = stream.local_addr();
-        info!(
-            "[{}:{}] Handling UDP bind request from {}:{}, seeking to bind {}:{}",
-            my_addr, my_port, their_addr, their_port, ccr.destination_address, ccr.destination_port
-        );
-
-        unimplemented!()
+        mut socket: TcpStream,
+        their_addr: SocketAddr,
+    ) -> Result<(), SOCKSv5ServerError> {
+        let ccr = ClientConnectionRequest::read(&mut socket).await?;
+        match ccr.command_code {
+            ClientConnectionCommand::AssociateUDPPort => {
+                self.handle_udp_request(socket, their_addr, ccr).await?
+            }
+            ClientConnectionCommand::EstablishTCPStream => {
+                self.handle_tcp_request(socket, their_addr, ccr).await?
+            }
+            ClientConnectionCommand::EstablishTCPPortBinding => {
+                self.handle_tcp_binding_request(socket, their_addr, ccr)
+                    .await?
+            }
+        }
+        Ok(())
     }
 
-    async fn handle_tcp_forward(
+    /// Handle UDP forwarding requests
+    #[allow(unreachable_code)]
+    async fn handle_udp_request(
         self,
-        mut stream: GenericStream,
+        stream: TcpStream,
+        their_addr: SocketAddr,
         ccr: ClientConnectionRequest,
-        their_addr: SOCKSv5Address,
-        their_port: u16,
-    ) -> Result<(), ServerError<N::Error>> {
+    ) -> Result<(), SOCKSv5ServerError> {
+        let my_addr = stream.local_addr()?;
+        tracing::info!(
+            "[{}:{}] Handling UDP bind request from {}:{}, seeking to bind towards {}:{}",
+            my_addr.ip(),
+            my_addr.port(),
+            their_addr.ip(),
+            their_addr.port(),
+            ccr.destination_address,
+            ccr.destination_port
+        );
+
+        let _socket = match ccr.destination_address.clone() {
+            SOCKSv5Address::IP4(x) => UdpSocket::bind((x, ccr.destination_port)).await?,
+            SOCKSv5Address::IP6(x) => UdpSocket::bind((x, ccr.destination_port)).await?,
+            SOCKSv5Address::Hostname(x) => UdpSocket::bind((x, ccr.destination_port)).await?,
+        };
+
+        // OK, it worked. In order to mitigate an infinitesimal chance of a race condition, we're
+        // going to set up our forwarding tasks first, and then return the result to the user. (Note,
+        // we'd have to be slightly more precious in order to ensure a lack of race conditions, as
+        // the runtime could take forever to actually start these tasks, but I'm not ready to be
+        // bothered by this, yet. FIXME.)
+        unimplemented!();
+
+        // Cool; now we can get the result out to the user.
+        let bound_address = _socket.local_addr()?;
+        let response = ServerResponse {
+            status: ServerResponseStatus::RequestGranted,
+            bound_address: bound_address.ip().into(),
+            bound_port: bound_address.port(),
+        };
+
+        response.write(&mut stream).await?;
+        Ok(())
+    }
+
+    /// Handle TCP forwarding requests
+    async fn handle_tcp_request(
+        self,
+        mut stream: TcpStream,
+        their_addr: SocketAddr,
+        ccr: ClientConnectionRequest,
+    ) -> Result<(), SOCKSv5ServerError> {
         // Let the user know that we're maybe making progress
-        let (my_addr, my_port) = stream.local_addr();
-        info!(
-            "[{}:{}] Handling TCP forward request from {}:{}, seeking to connect to {}:{}",
-            my_addr, my_port, their_addr, their_port, ccr.destination_address, ccr.destination_port
+        let my_addr = stream.local_addr()?;
+        tracing::info!(
+            "[{}] Handling TCP forward request from {}, seeking to connect to {}:{}",
+            my_addr,
+            their_addr,
+            ccr.destination_address,
+            ccr.destination_port
         );
 
         // OK, first thing's first: We need to actually connect to the server that the user
         // wants us to connect to.
-        let connection_res = {
-            let mut network = self.network.lock().await;
-            network
-                .connect(ccr.destination_address.clone(), ccr.destination_port)
-                .await
-        };
-
-        let outgoing_stream = match connection_res {
-            Ok(x) => x,
-            Err(e) => {
-                error!("Failed to connect to {}: {}", ccr.destination_address, e);
-                let response = ServerResponse::error(&e);
-                response.write(&mut stream).await?;
-                return Err(ServerError::NetworkError(e));
+        let outgoing_stream = match &ccr.destination_address {
+            SOCKSv5Address::IP4(x) => TcpStream::connect((*x, ccr.destination_port)).await?,
+            SOCKSv5Address::IP6(x) => TcpStream::connect((*x, ccr.destination_port)).await?,
+            SOCKSv5Address::Hostname(x) => {
+                TcpStream::connect((x.as_ref(), ccr.destination_port)).await?
             }
         };
 
-        trace!(
+        tracing::trace!(
             "Connection established to {}:{}",
             ccr.destination_address,
             ccr.destination_port
@@ -352,117 +304,117 @@ impl<N: Networklike + Clone + Send + 'static> SOCKSv5Server<N> {
         // Now, for whatever reason -- and this whole thing sent me down a garden path
         // in understanding how this whole protocol works -- we tell the user what address
         // and port we bound for that connection.
-        let (bound_address, bound_port) = outgoing_stream.local_addr();
+        let bound_address = outgoing_stream.local_addr()?;
         let response = ServerResponse {
             status: ServerResponseStatus::RequestGranted,
-            bound_address,
-            bound_port,
+            bound_address: bound_address.ip().into(),
+            bound_port: bound_address.port(),
         };
         response.write(&mut stream).await?;
 
         // so now tie our streams together, and we're good to go
-        tie_streams(
-            format!("{}:{}", their_addr, their_port),
-            stream,
-            format!("{}:{}", ccr.destination_address, ccr.destination_port),
-            outgoing_stream,
-        )
-        .await;
+        tie_streams(stream, outgoing_stream).await;
+
         Ok(())
     }
 
-    async fn handle_tcp_bind(
+    /// Handle TCP binding requests
+    async fn handle_tcp_binding_request(
         self,
-        mut stream: GenericStream,
+        mut stream: TcpStream,
+        their_addr: SocketAddr,
         ccr: ClientConnectionRequest,
-        their_addr: SOCKSv5Address,
-        their_port: u16,
-    ) -> Result<(), ServerError<N::Error>> {
+    ) -> Result<(), SOCKSv5ServerError> {
         // Let the user know that we're maybe making progress
-        let (my_addr, my_port) = stream.local_addr();
-        info!(
-            "[{}:{}] Handling TCP bind request from {}:{}, seeking to bind {}:{}",
-            my_addr, my_port, their_addr, their_port, ccr.destination_address, ccr.destination_port
+        let my_addr = stream.local_addr()?;
+        tracing::info!(
+            "[{}] Handling TCP bind request from {}, seeking to bind {}:{}",
+            my_addr,
+            their_addr,
+            ccr.destination_address,
+            ccr.destination_port
         );
 
         // OK, we have to bind the darn socket first.
-        let port_binding = {
-            let mut network = self.network.lock().await;
-            network.listen(their_addr.clone(), their_port).await
-        }
-        .map_err(ServerError::NetworkError)?;
+        let listener_port = match &their_addr {
+            SocketAddr::V4(_) => TcpSocket::new_v4(),
+            SocketAddr::V6(_) => TcpSocket::new_v6(),
+        }?;
+        // FIXME: Might want to bind on a particular interface, based on a
+        // config flag, at some point.
+        let listener = listener_port.listen(1)?;
 
         // Tell them what we bound, just in case they want to inform anyone.
-        let (bound_address, bound_port) = port_binding.local_addr();
+        let bound_address = listener.local_addr()?;
         let response = ServerResponse {
             status: ServerResponseStatus::RequestGranted,
-            bound_address,
-            bound_port,
+            bound_address: bound_address.ip().into(),
+            bound_port: bound_address.port(),
         };
         response.write(&mut stream).await?;
 
         // Wait politely for someone to talk to us.
-        let (other, other_addr, other_port) = port_binding
-            .accept()
-            .await
-            .map_err(ServerError::NetworkError)?;
+        let (other, other_addr) = listener.accept().await?;
         let info = ServerResponse {
             status: ServerResponseStatus::RequestGranted,
-            bound_address: other_addr.clone(),
-            bound_port: other_port,
+            bound_address: other_addr.ip().into(),
+            bound_port: other_addr.port(),
         };
         info.write(&mut stream).await?;
 
-        tie_streams(
-            format!("{}:{}", their_addr, their_port),
-            stream,
-            format!("{}:{}", other_addr, other_port),
-            other,
-        )
-        .await;
+        tie_streams(stream, other).await;
+
         Ok(())
     }
 }
 
-async fn tie_streams(
-    left_name: String,
-    left: GenericStream,
-    right_name: String,
-    right: GenericStream,
-) {
-    // Now that we've informed them of that, we set up one task to transfer information
-    // from the current stream (`stream`) to the connection (`outgoing_stream`), and
-    // another task that goes in the reverse direction.
-    //
-    // I've chosen to start two fresh tasks and let this one die; I'm not sure that
-    // this is the right approach. My only rationale is that this might let some
-    // memory we might have accumulated along the way drop more easily, but that
-    // might not actually matter.
-    let mut from_left = left.clone();
-    let mut from_right = right.clone();
-    let mut to_left = left;
-    let mut to_right = right;
-    let left_right_name = format!("{} >--> {}", left_name, right_name);
-    let right_left_name = format!("{} <--< {}", left_name, right_name);
+async fn tie_streams(mut left: TcpStream, mut right: TcpStream) {
+    let left_local_addr = left
+        .local_addr()
+        .expect("couldn't get left local address in tie_streams");
+    let left_peer_addr = left
+        .peer_addr()
+        .expect("couldn't get left peer address in tie_streams");
+    let right_local_addr = right
+        .local_addr()
+        .expect("couldn't get right local address in tie_streams");
+    let right_peer_addr = right
+        .peer_addr()
+        .expect("couldn't get right peer address in tie_streams");
 
-    task::spawn(async move {
-        info!("Spawned {} task", left_right_name);
-        if let Err(e) = io::copy(&mut from_left, &mut to_right).await {
-            warn!("{} connection failed with: {}", left_right_name, e);
-        }
-    });
-
-    task::spawn(async move {
-        info!("Spawned {} task", right_left_name);
-        if let Err(e) = io::copy(&mut from_right, &mut to_left).await {
-            warn!("{} connection failed with: {}", right_left_name, e);
+    tokio::task::spawn(async move {
+        tracing::info!(
+            "Setting up linkage {}/{} <-> {}/{}",
+            left_peer_addr,
+            left_local_addr,
+            right_local_addr,
+            right_peer_addr
+        );
+        match copy_bidirectional(&mut left, &mut right).await {
+            Ok((l2r, r2l)) => tracing::info!(
+                "Shutting down linkage {}/{} <-> {}/{} (sent {} and {} bytes, respectively)",
+                left_peer_addr,
+                left_local_addr,
+                right_local_addr,
+                right_peer_addr,
+                l2r,
+                r2l
+            ),
+            Err(e) => tracing::warn!(
+                "Shutting down linkage {}/{} <-> {}/{} with error: {}",
+                left_peer_addr,
+                left_local_addr,
+                right_local_addr,
+                right_peer_addr,
+                e
+            ),
         }
     });
 }
 
 #[allow(clippy::upper_case_acronyms)]
 enum ChosenMethod {
-    TLS(fn(GenericStream) -> Option<GenericStream>),
+    TLS(fn() -> Option<()>),
     Password(fn(&str, &str) -> bool),
     None,
 }
@@ -567,7 +519,7 @@ fn reasonable_auth_method_choices() {
     );
 
     // OK, cool. If we have a TLS handler, that shouldn't actually make a difference.
-    params.connect_tls = Some(|_| unimplemented!());
+    params.connect_tls = Some(|| unimplemented!());
     assert_eq!(
         choose_authentication_method(&params, &client_suggestions).map(AuthenticationMethod::from),
         None
@@ -580,7 +532,7 @@ fn reasonable_auth_method_choices() {
         None
     );
     // but if we have a handler, and they go for it, we use it.
-    params.connect_tls = Some(|_| unimplemented!());
+    params.connect_tls = Some(|| unimplemented!());
     assert_eq!(
         choose_authentication_method(&params, &client_suggestions).map(AuthenticationMethod::from),
         Some(AuthenticationMethod::SSL)
@@ -599,76 +551,4 @@ fn reasonable_auth_method_choices() {
         choose_authentication_method(&params, &client_suggestions).map(AuthenticationMethod::from),
         Some(AuthenticationMethod::SSL)
     );
-}
-
-async fn run_authentication(
-    params: &SecurityParameters,
-    mut stream: GenericStream,
-) -> Result<GenericStream, AuthenticationError> {
-    let greeting = ClientGreeting::read(&mut stream).await?;
-
-    match choose_authentication_method(params, &greeting.acceptable_methods) {
-        // it's not us, it's you
-        None => {
-            trace!("Failed to find acceptable authentication method.");
-            let rejection_letter = ServerChoice::rejection();
-
-            rejection_letter.write(&mut stream).await?;
-            stream.flush().await?;
-
-            Err(AuthenticationError::ItsNotUsItsYou)
-        }
-
-        // the gold standard. great choice.
-        Some(ChosenMethod::TLS(converter)) => {
-            trace!("Choosing TLS for authentication.");
-            let lets_do_this = ServerChoice::option(AuthenticationMethod::SSL);
-            lets_do_this.write(&mut stream).await?;
-            stream.flush().await?;
-
-            converter(stream).ok_or(AuthenticationError::FailedTLSHandshake)
-        }
-
-        // well, I guess this is something?
-        Some(ChosenMethod::Password(checker)) => {
-            trace!("Choosing Username/Password for authentication.");
-            let ok_lets_do_password =
-                ServerChoice::option(AuthenticationMethod::UsernameAndPassword);
-            ok_lets_do_password.write(&mut stream).await?;
-            stream.flush().await?;
-
-            let their_info = ClientUsernamePassword::read(&mut stream).await?;
-            if checker(&their_info.username, &their_info.password) {
-                let its_all_good = ServerAuthResponse::success();
-                its_all_good.write(&mut stream).await?;
-                stream.flush().await?;
-                Ok(stream)
-            } else {
-                let yeah_no = ServerAuthResponse::failure();
-                yeah_no.write(&mut stream).await?;
-                stream.flush().await?;
-                Err(AuthenticationError::FailedUsernamePassword(
-                    their_info.username,
-                ))
-            }
-        }
-
-        Some(ChosenMethod::None) => {
-            trace!("Just skipping the whole authentication thing.");
-            let nothin_i_guess = ServerChoice::option(AuthenticationMethod::None);
-            nothin_i_guess.write(&mut stream).await?;
-            stream.flush().await?;
-            Ok(stream)
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum ServerError<E: Debug + Display> {
-    #[error("Error in deserialization: {0}")]
-    DeserializationError(#[from] DeserializationError),
-    #[error("Error in serialization: {0}")]
-    SerializationError(#[from] SerializationError),
-    #[error("Underlying network error: {0}")]
-    NetworkError(E),
 }

@@ -1,16 +1,12 @@
-#[cfg(test)]
-use crate::errors::AuthenticationDeserializationError;
-use crate::errors::{DeserializationError, SerializationError};
-use crate::messages::AuthenticationMethod;
-use crate::standard_roundtrip;
-#[cfg(test)]
-use async_std::task;
-#[cfg(test)]
-use futures::io::Cursor;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use proptest::proptest;
+use crate::messages::authentication_method::{
+    AuthenticationMethod, AuthenticationMethodReadError, AuthenticationMethodWriteError,
+};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+#[cfg(test)]
+use std::io::Cursor;
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Client greetings are the first message sent in a SOCKSv5 session. They
 /// identify that there's a client that wants to talk to a server, and that
@@ -23,26 +19,52 @@ pub struct ClientGreeting {
     pub acceptable_methods: Vec<AuthenticationMethod>,
 }
 
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ClientGreetingReadError {
+    #[error("Invalid version in client request: {0} (expected 5)")]
+    InvalidVersion(u8),
+    #[error(transparent)]
+    AuthMethodReadError(#[from] AuthenticationMethodReadError),
+    #[error("Underlying read error: {0}")]
+    ReadError(String),
+}
+
+impl From<std::io::Error> for ClientGreetingReadError {
+    fn from(x: std::io::Error) -> ClientGreetingReadError {
+        ClientGreetingReadError::ReadError(format!("{}", x))
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ClientGreetingWriteError {
+    #[error("Too many methods provided; need <256, saw {0}")]
+    TooManyMethods(usize),
+    #[error(transparent)]
+    AuthMethodWriteError(#[from] AuthenticationMethodWriteError),
+    #[error("Underlying write error: {0}")]
+    WriteError(String),
+}
+
+impl From<std::io::Error> for ClientGreetingWriteError {
+    fn from(x: std::io::Error) -> ClientGreetingWriteError {
+        ClientGreetingWriteError::WriteError(format!("{}", x))
+    }
+}
+
 impl ClientGreeting {
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
-    ) -> Result<ClientGreeting, DeserializationError> {
-        let mut buffer = [0; 1];
+    ) -> Result<ClientGreeting, ClientGreetingReadError> {
+        let version = r.read_u8().await?;
 
-        if r.read(&mut buffer).await? == 0 {
-            return Err(DeserializationError::NotEnoughData);
+        if version != 5 {
+            return Err(ClientGreetingReadError::InvalidVersion(version));
         }
 
-        if buffer[0] != 5 {
-            return Err(DeserializationError::InvalidVersion(5, buffer[0]));
-        }
+        let num_methods = r.read_u8().await? as usize;
 
-        if r.read(&mut buffer).await? == 0 {
-            return Err(DeserializationError::NotEnoughData);
-        }
-
-        let mut acceptable_methods = Vec::with_capacity(buffer[0] as usize);
-        for _ in 0..buffer[0] {
+        let mut acceptable_methods = Vec::with_capacity(num_methods);
+        for _ in 0..num_methods {
             acceptable_methods.push(AuthenticationMethod::read(r).await?);
         }
 
@@ -52,9 +74,9 @@ impl ClientGreeting {
     pub async fn write<W: AsyncWrite + Send + Unpin>(
         &self,
         w: &mut W,
-    ) -> Result<(), SerializationError> {
+    ) -> Result<(), ClientGreetingWriteError> {
         if self.acceptable_methods.len() > 255 {
-            return Err(SerializationError::TooManyAuthMethods(
+            return Err(ClientGreetingWriteError::TooManyMethods(
                 self.acceptable_methods.len(),
             ));
         }
@@ -70,44 +92,41 @@ impl ClientGreeting {
     }
 }
 
-standard_roundtrip!(client_greeting_roundtrips, ClientGreeting);
+crate::standard_roundtrip!(client_greeting_roundtrips, ClientGreeting);
 
-#[test]
-fn check_short_reads() {
+#[tokio::test]
+async fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ClientGreeting::read(&mut cursor);
-    assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
+    let ys = ClientGreeting::read(&mut cursor).await;
+    assert!(matches!(ys, Err(ClientGreetingReadError::ReadError(_))));
 
     let no_len = vec![5];
     let mut cursor = Cursor::new(no_len);
-    let ys = ClientGreeting::read(&mut cursor);
-    assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
+    let ys = ClientGreeting::read(&mut cursor).await;
+    assert!(matches!(ys, Err(ClientGreetingReadError::ReadError(_))));
 
     let bad_len = vec![5, 9];
     let mut cursor = Cursor::new(bad_len);
-    let ys = ClientGreeting::read(&mut cursor);
-    assert_eq!(
-        Err(DeserializationError::AuthenticationMethodError(
-            AuthenticationDeserializationError::NoDataFound
-        )),
-        task::block_on(ys)
-    );
+    let ys = ClientGreeting::read(&mut cursor).await;
+    assert!(matches!(
+        ys,
+        Err(ClientGreetingReadError::AuthMethodReadError(
+            AuthenticationMethodReadError::ReadError(_)
+        ))
+    ));
 }
 
-#[test]
-fn check_bad_version() {
+#[tokio::test]
+async fn check_bad_version() {
     let no_len = vec![6, 1, 1];
     let mut cursor = Cursor::new(no_len);
-    let ys = ClientGreeting::read(&mut cursor);
-    assert_eq!(
-        Err(DeserializationError::InvalidVersion(5, 6)),
-        task::block_on(ys)
-    );
+    let ys = ClientGreeting::read(&mut cursor).await;
+    assert_eq!(Err(ClientGreetingReadError::InvalidVersion(6)), ys);
 }
 
-#[test]
-fn check_too_many() {
+#[tokio::test]
+async fn check_too_many() {
     let mut auth_methods = Vec::with_capacity(512);
     auth_methods.resize(512, AuthenticationMethod::ChallengeHandshake);
     let greet = ClientGreeting {
@@ -115,7 +134,7 @@ fn check_too_many() {
     };
     let mut output = vec![0; 1024];
     assert_eq!(
-        Err(SerializationError::TooManyAuthMethods(512)),
-        task::block_on(greet.write(&mut output))
+        Err(ClientGreetingWriteError::TooManyMethods(512)),
+        greet.write(&mut output).await
     );
 }

@@ -1,16 +1,10 @@
-use crate::errors::{DeserializationError, SerializationError};
-use crate::serialize::{read_string, write_string};
-use crate::standard_roundtrip;
+use crate::messages::string::{SOCKSv5String, SOCKSv5StringReadError, SOCKSv5StringWriteError};
 #[cfg(test)]
-use async_std::task;
+use proptest::prelude::{Arbitrary, BoxedStrategy, Strategy};
 #[cfg(test)]
-use futures::io::Cursor;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-#[cfg(test)]
-use proptest::prelude::{Arbitrary, BoxedStrategy};
-use proptest::proptest;
-#[cfg(test)]
-use proptest::strategy::Strategy;
+use std::io::Cursor;
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientUsernamePassword {
@@ -30,30 +24,58 @@ impl Arbitrary for ClientUsernamePassword {
 
     fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
         let max_len = args.unwrap_or(12) as usize;
-        (USERNAME_REGEX, PASSWORD_REGEX).prop_map(move |(mut username, mut password)| {
-            username.shrink_to(max_len);
-            password.shrink_to(max_len);
-            ClientUsernamePassword { username, password }
-        }).boxed()
+        (USERNAME_REGEX, PASSWORD_REGEX)
+            .prop_map(move |(mut username, mut password)| {
+                username.shrink_to(max_len);
+                password.shrink_to(max_len);
+                ClientUsernamePassword { username, password }
+            })
+            .boxed()
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ClientUsernamePasswordReadError {
+    #[error("Underlying buffer read error: {0}")]
+    ReadError(String),
+    #[error("Invalid username/password version; expected 1, saw {0}")]
+    InvalidVersion(u8),
+    #[error(transparent)]
+    StringError(#[from] SOCKSv5StringReadError),
+}
+
+impl From<std::io::Error> for ClientUsernamePasswordReadError {
+    fn from(x: std::io::Error) -> ClientUsernamePasswordReadError {
+        ClientUsernamePasswordReadError::ReadError(format!("{}", x))
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ClientUsernamePasswordWriteError {
+    #[error("Underlying buffer read error: {0}")]
+    WriteError(String),
+    #[error(transparent)]
+    StringError(#[from] SOCKSv5StringWriteError),
+}
+
+impl From<std::io::Error> for ClientUsernamePasswordWriteError {
+    fn from(x: std::io::Error) -> ClientUsernamePasswordWriteError {
+        ClientUsernamePasswordWriteError::WriteError(format!("{}", x))
     }
 }
 
 impl ClientUsernamePassword {
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
-    ) -> Result<Self, DeserializationError> {
-        let mut buffer = [0; 1];
+    ) -> Result<Self, ClientUsernamePasswordReadError> {
+        let version = r.read_u8().await?;
 
-        if r.read(&mut buffer).await? == 0 {
-            return Err(DeserializationError::NotEnoughData);
+        if version != 1 {
+            return Err(ClientUsernamePasswordReadError::InvalidVersion(version));
         }
 
-        if buffer[0] != 1 {
-            return Err(DeserializationError::InvalidVersion(1, buffer[0]));
-        }
-
-        let username = read_string(r).await?;
-        let password = read_string(r).await?;
+        let username = SOCKSv5String::read(r).await?.into();
+        let password = SOCKSv5String::read(r).await?.into();
 
         Ok(ClientUsernamePassword { username, password })
     }
@@ -61,35 +83,40 @@ impl ClientUsernamePassword {
     pub async fn write<W: AsyncWrite + Send + Unpin>(
         &self,
         w: &mut W,
-    ) -> Result<(), SerializationError> {
-        w.write_all(&[1]).await?;
-        write_string(&self.username, w).await?;
-        write_string(&self.password, w).await
+    ) -> Result<(), ClientUsernamePasswordWriteError> {
+        w.write_u8(1).await?;
+        SOCKSv5String::from(self.username.as_str()).write(w).await?;
+        SOCKSv5String::from(self.password.as_str()).write(w).await?;
+        Ok(())
     }
 }
 
-standard_roundtrip!(username_password_roundtrips, ClientUsernamePassword);
+crate::standard_roundtrip!(username_password_roundtrips, ClientUsernamePassword);
 
-#[test]
-fn check_short_reads() {
+#[tokio::test]
+async fn heck_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ClientUsernamePassword::read(&mut cursor);
-    assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
+    let ys = ClientUsernamePassword::read(&mut cursor).await;
+    assert!(matches!(
+        ys,
+        Err(ClientUsernamePasswordReadError::ReadError(_))
+    ));
 
     let user_only = vec![1, 3, 102, 111, 111];
     let mut cursor = Cursor::new(user_only);
-    let ys = ClientUsernamePassword::read(&mut cursor);
-    assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
+    let ys = ClientUsernamePassword::read(&mut cursor).await;
+    println!("ys: {:?}", ys);
+    assert!(matches!(
+        ys,
+        Err(ClientUsernamePasswordReadError::StringError(_))
+    ));
 }
 
-#[test]
-fn check_bad_version() {
+#[tokio::test]
+async fn check_bad_version() {
     let bad_len = vec![5];
     let mut cursor = Cursor::new(bad_len);
-    let ys = ClientUsernamePassword::read(&mut cursor);
-    assert_eq!(
-        Err(DeserializationError::InvalidVersion(1, 5)),
-        task::block_on(ys)
-    );
+    let ys = ClientUsernamePassword::read(&mut cursor).await;
+    assert_eq!(Err(ClientUsernamePasswordReadError::InvalidVersion(5)), ys);
 }

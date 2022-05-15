@@ -1,16 +1,12 @@
-use crate::errors::{AuthenticationDeserializationError, DeserializationError, SerializationError};
-use crate::standard_roundtrip;
 #[cfg(test)]
-use async_std::task;
-#[cfg(test)]
-use futures::io::Cursor;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use proptest::proptest;
-#[cfg(test)]
-use proptest::prelude::{Arbitrary, Just, Strategy, prop_oneof};
+use proptest::prelude::{prop_oneof, Arbitrary, Just, Strategy};
 #[cfg(test)]
 use proptest::strategy::BoxedStrategy;
 use std::fmt;
+#[cfg(test)]
+use std::io::Cursor;
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +22,34 @@ pub enum AuthenticationMethod {
     JSONPropertyBlock,
     PrivateMethod(u8),
     NoAcceptableMethods,
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum AuthenticationMethodReadError {
+    #[error("Invalid authentication method #{0}")]
+    UnknownAuthenticationMethod(u8),
+    #[error("Error in underlying buffer: {0}")]
+    ReadError(String),
+}
+
+impl From<std::io::Error> for AuthenticationMethodReadError {
+    fn from(x: std::io::Error) -> AuthenticationMethodReadError {
+        AuthenticationMethodReadError::ReadError(format!("{}", x))
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum AuthenticationMethodWriteError {
+    #[error("Trying to write invalid authentication method #{0}")]
+    InvalidAuthMethod(u8),
+    #[error("Error in underlying buffer: {0}")]
+    WriteError(String),
+}
+
+impl From<std::io::Error> for AuthenticationMethodWriteError {
+    fn from(x: std::io::Error) -> AuthenticationMethodWriteError {
+        AuthenticationMethodWriteError::WriteError(format!("{}", x))
+    }
 }
 
 impl fmt::Display for AuthenticationMethod {
@@ -65,26 +89,17 @@ impl Arbitrary for AuthenticationMethod {
             Just(AuthenticationMethod::MultiAuthenticationFramework),
             Just(AuthenticationMethod::JSONPropertyBlock),
             Just(AuthenticationMethod::NoAcceptableMethods),
-
             (0x80u8..=0xfe).prop_map(AuthenticationMethod::PrivateMethod),
-        ].boxed()
+        ]
+        .boxed()
     }
 }
-
-
 
 impl AuthenticationMethod {
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
-    ) -> Result<AuthenticationMethod, DeserializationError> {
-        let mut byte_buffer = [0u8; 1];
-        let amount_read = r.read(&mut byte_buffer).await?;
-
-        if amount_read == 0 {
-            return Err(AuthenticationDeserializationError::NoDataFound.into());
-        }
-
-        match byte_buffer[0] {
+    ) -> Result<AuthenticationMethod, AuthenticationMethodReadError> {
+        match r.read_u8().await? {
             0 => Ok(AuthenticationMethod::None),
             1 => Ok(AuthenticationMethod::GSSAPI),
             2 => Ok(AuthenticationMethod::UsernameAndPassword),
@@ -96,14 +111,16 @@ impl AuthenticationMethod {
             9 => Ok(AuthenticationMethod::JSONPropertyBlock),
             x if (0x80..=0xfe).contains(&x) => Ok(AuthenticationMethod::PrivateMethod(x)),
             0xff => Ok(AuthenticationMethod::NoAcceptableMethods),
-            e => Err(AuthenticationDeserializationError::InvalidAuthenticationByte(e).into()),
+            e => Err(AuthenticationMethodReadError::UnknownAuthenticationMethod(
+                e,
+            )),
         }
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
         &self,
         w: &mut W,
-    ) -> Result<(), SerializationError> {
+    ) -> Result<(), AuthenticationMethodWriteError> {
         let value = match self {
             AuthenticationMethod::None => 0,
             AuthenticationMethod::GSSAPI => 1,
@@ -114,31 +131,32 @@ impl AuthenticationMethod {
             AuthenticationMethod::NDS => 7,
             AuthenticationMethod::MultiAuthenticationFramework => 8,
             AuthenticationMethod::JSONPropertyBlock => 9,
-            AuthenticationMethod::PrivateMethod(pm) => *pm,
+            AuthenticationMethod::PrivateMethod(pm) if (0x80..=0xfe).contains(pm) => *pm,
+            AuthenticationMethod::PrivateMethod(pm) => {
+                return Err(AuthenticationMethodWriteError::InvalidAuthMethod(*pm))
+            }
             AuthenticationMethod::NoAcceptableMethods => 0xff,
         };
 
-        Ok(w.write_all(&[value]).await?)
+        Ok(w.write_u8(value).await?)
     }
 }
 
-standard_roundtrip!(auth_byte_roundtrips, AuthenticationMethod);
+crate::standard_roundtrip!(auth_byte_roundtrips, AuthenticationMethod);
 
-#[test]
-fn bad_byte() {
+#[tokio::test]
+async fn bad_byte() {
     let no_len = vec![42];
     let mut cursor = Cursor::new(no_len);
-    let ys = AuthenticationMethod::read(&mut cursor);
+    let ys = AuthenticationMethod::read(&mut cursor).await.unwrap_err();
     assert_eq!(
-        Err(DeserializationError::AuthenticationMethodError(
-            AuthenticationDeserializationError::InvalidAuthenticationByte(42)
-        )),
-        task::block_on(ys)
+        AuthenticationMethodReadError::UnknownAuthenticationMethod(42),
+        ys
     );
 }
 
-#[test]
-fn display_isnt_empty() {
+#[tokio::test]
+async fn display_isnt_empty() {
     let vals = vec![
         AuthenticationMethod::None,
         AuthenticationMethod::GSSAPI,

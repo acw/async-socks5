@@ -1,21 +1,10 @@
-use crate::errors::{DeserializationError, SerializationError};
-use crate::network::generic::IntoErrorResponse;
-use crate::network::SOCKSv5Address;
-use crate::serialize::read_amt;
-use crate::standard_roundtrip;
-#[cfg(test)]
-use async_std::io::ErrorKind;
-#[cfg(test)]
-use async_std::task;
-#[cfg(test)]
-use futures::io::Cursor;
-use futures::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use log::warn;
-use proptest::proptest;
+use crate::address::{SOCKSv5Address, SOCKSv5AddressReadError, SOCKSv5AddressWriteError};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
-use std::net::Ipv4Addr;
+#[cfg(test)]
+use std::io::Cursor;
 use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[cfg_attr(test, derive(Arbitrary))]
@@ -40,12 +29,6 @@ pub enum ServerResponseStatus {
     AddressTypeNotSupported,
 }
 
-impl IntoErrorResponse for ServerResponseStatus {
-    fn into_response(&self) -> ServerResponseStatus {
-        self.clone()
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct ServerResponse {
@@ -54,33 +37,57 @@ pub struct ServerResponse {
     pub bound_port: u16,
 }
 
-impl ServerResponse {
-    pub fn error<E: IntoErrorResponse>(resp: &E) -> ServerResponse {
-        ServerResponse {
-            status: resp.into_response(),
-            bound_address: SOCKSv5Address::IP4(Ipv4Addr::new(0, 0, 0, 0)),
-            bound_port: 0,
-        }
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ServerResponseReadError {
+    #[error("Error reading from underlying buffer: {0}")]
+    ReadError(String),
+    #[error(transparent)]
+    AddressReadError(#[from] SOCKSv5AddressReadError),
+    #[error("Invalid version; expected 5, got {0}")]
+    InvalidVersion(u8),
+    #[error("Invalid reserved byte; saw {0}, should be 0")]
+    InvalidReservedByte(u8),
+    #[error("Invalid (or just unknown) server response value {0}")]
+    InvalidServerResponse(u8),
+}
+
+impl From<std::io::Error> for ServerResponseReadError {
+    fn from(x: std::io::Error) -> ServerResponseReadError {
+        ServerResponseReadError::ReadError(format!("{}", x))
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ServerResponseWriteError {
+    #[error("Error reading from underlying buffer: {0}")]
+    WriteError(String),
+    #[error(transparent)]
+    AddressWriteError(#[from] SOCKSv5AddressWriteError),
+}
+
+impl From<std::io::Error> for ServerResponseWriteError {
+    fn from(x: std::io::Error) -> ServerResponseWriteError {
+        ServerResponseWriteError::WriteError(format!("{}", x))
     }
 }
 
 impl ServerResponse {
     pub async fn read<R: AsyncRead + Send + Unpin>(
         r: &mut R,
-    ) -> Result<Self, DeserializationError> {
-        let mut buffer = [0; 3];
-
-        read_amt(r, 3, &mut buffer).await?;
-
-        if buffer[0] != 5 {
-            return Err(DeserializationError::InvalidVersion(5, buffer[0]));
+    ) -> Result<Self, ServerResponseReadError> {
+        let version = r.read_u8().await?;
+        if version != 5 {
+            return Err(ServerResponseReadError::InvalidVersion(version));
         }
 
-        if buffer[2] != 0 {
-            warn!(target: "async-socks5", "Hey, this isn't terrible, but the server is sending invalid reserved bytes.");
+        let status_byte = r.read_u8().await?;
+
+        let reserved_byte = r.read_u8().await?;
+        if reserved_byte != 0 {
+            return Err(ServerResponseReadError::InvalidReservedByte(reserved_byte));
         }
 
-        let status = match buffer[1] {
+        let status = match status_byte {
             0x00 => ServerResponseStatus::RequestGranted,
             0x01 => ServerResponseStatus::GeneralFailure,
             0x02 => ServerResponseStatus::ConnectionNotAllowedByRule,
@@ -90,12 +97,11 @@ impl ServerResponse {
             0x06 => ServerResponseStatus::TTLExpired,
             0x07 => ServerResponseStatus::CommandNotSupported,
             0x08 => ServerResponseStatus::AddressTypeNotSupported,
-            x => return Err(DeserializationError::InvalidServerResponse(x)),
+            x => return Err(ServerResponseReadError::InvalidServerResponse(x)),
         };
 
         let bound_address = SOCKSv5Address::read(r).await?;
-        read_amt(r, 2, &mut buffer).await?;
-        let bound_port = ((buffer[0] as u16) << 8) + (buffer[1] as u16);
+        let bound_port = r.read_u16().await?;
 
         Ok(ServerResponse {
             status,
@@ -107,7 +113,9 @@ impl ServerResponse {
     pub async fn write<W: AsyncWrite + Send + Unpin>(
         &self,
         w: &mut W,
-    ) -> Result<(), SerializationError> {
+    ) -> Result<(), ServerResponseWriteError> {
+        w.write_u8(5).await?;
+
         let status_code = match self.status {
             ServerResponseStatus::RequestGranted => 0x00,
             ServerResponseStatus::GeneralFailure => 0x01,
@@ -119,59 +127,61 @@ impl ServerResponse {
             ServerResponseStatus::CommandNotSupported => 0x07,
             ServerResponseStatus::AddressTypeNotSupported => 0x08,
         };
-
-        w.write_all(&[5, status_code, 0]).await?;
+        w.write_u8(status_code).await?;
+        w.write_u8(0).await?;
         self.bound_address.write(w).await?;
-        w.write_all(&[
-            (self.bound_port >> 8) as u8,
-            (self.bound_port & 0xffu16) as u8,
-        ])
-        .await
-        .map_err(SerializationError::IOError)
+        w.write_u16(self.bound_port).await?;
+
+        Ok(())
     }
 }
 
-standard_roundtrip!(server_response_roundtrips, ServerResponse);
+crate::standard_roundtrip!(server_response_roundtrips, ServerResponse);
 
-#[test]
-fn check_short_reads() {
+#[tokio::test]
+async fn check_short_reads() {
     let empty = vec![];
     let mut cursor = Cursor::new(empty);
-    let ys = ServerResponse::read(&mut cursor);
-    assert_eq!(Err(DeserializationError::NotEnoughData), task::block_on(ys));
+    let ys = ServerResponse::read(&mut cursor).await;
+    assert!(matches!(ys, Err(ServerResponseReadError::ReadError(_))));
 }
 
-#[test]
-fn check_bad_version() {
+#[tokio::test]
+async fn check_bad_version() {
     let bad_ver = vec![6, 1, 1];
     let mut cursor = Cursor::new(bad_ver);
-    let ys = ServerResponse::read(&mut cursor);
-    assert_eq!(
-        Err(DeserializationError::InvalidVersion(5, 6)),
-        task::block_on(ys)
-    );
+    let ys = ServerResponse::read(&mut cursor).await;
+    assert_eq!(Err(ServerResponseReadError::InvalidVersion(6)), ys);
 }
 
-#[test]
-fn check_bad_command() {
+#[tokio::test]
+async fn check_bad_reserved() {
     let bad_cmd = vec![5, 32, 0x42];
     let mut cursor = Cursor::new(bad_cmd);
-    let ys = ServerResponse::read(&mut cursor);
-    assert_eq!(
-        Err(DeserializationError::InvalidServerResponse(32)),
-        task::block_on(ys)
-    );
+    let ys = ServerResponse::read(&mut cursor).await;
+    assert_eq!(Err(ServerResponseReadError::InvalidReservedByte(0x42)), ys);
 }
 
-#[test]
-fn short_write_fails_right() {
+#[tokio::test]
+async fn check_bad_command() {
+    let bad_cmd = vec![5, 32, 0];
+    let mut cursor = Cursor::new(bad_cmd);
+    let ys = ServerResponse::read(&mut cursor).await;
+    assert_eq!(Err(ServerResponseReadError::InvalidServerResponse(32)), ys);
+}
+
+#[tokio::test]
+async fn short_write_fails_right() {
     let mut buffer = [0u8; 2];
-    let cmd = ServerResponse::error(&ServerResponseStatus::AddressTypeNotSupported);
+    let cmd = ServerResponse {
+        status: ServerResponseStatus::AddressTypeNotSupported,
+        bound_address: SOCKSv5Address::Hostname("tester.com".to_string()),
+        bound_port: 99,
+    };
     let mut cursor = Cursor::new(&mut buffer as &mut [u8]);
-    let result = task::block_on(cmd.write(&mut cursor));
-    match result {
-        Ok(_) => panic!("Mysteriously able to fit > 2 bytes in 2 bytes."),
-        Err(SerializationError::IOError(x)) => assert_eq!(ErrorKind::WriteZero, x.kind()),
-        Err(e) => panic!("Got the wrong error writing too much data: {}", e),
-    }
+    let result = cmd.write(&mut cursor).await;
+    assert!(matches!(
+        result,
+        Err(ServerResponseWriteError::WriteError(_))
+    ));
 }
