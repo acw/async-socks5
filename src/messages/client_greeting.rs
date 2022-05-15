@@ -72,7 +72,7 @@ impl ClientGreeting {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        mut self,
         w: &mut W,
     ) -> Result<(), ClientGreetingWriteError> {
         if self.acceptable_methods.len() > 255 {
@@ -85,7 +85,7 @@ impl ClientGreeting {
         buffer.push(5);
         buffer.push(self.acceptable_methods.len() as u8);
         w.write_all(&buffer).await?;
-        for authmeth in self.acceptable_methods.iter() {
+        for authmeth in self.acceptable_methods.drain(..) {
             authmeth.write(w).await?;
         }
         Ok(())

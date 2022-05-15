@@ -5,7 +5,7 @@ use std::string::FromUtf8Error;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SOCKSv5String(String);
 
 #[cfg(test)]
@@ -75,7 +75,7 @@ impl SOCKSv5String {
     }
 
     pub async fn write<W: AsyncWrite + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), SOCKSv5StringWriteError> {
         let bytestring = self.0.as_bytes();

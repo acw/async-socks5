@@ -111,7 +111,7 @@ impl ServerResponse {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), ServerResponseWriteError> {
         w.write_u8(5).await?;

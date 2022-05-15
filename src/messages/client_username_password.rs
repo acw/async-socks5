@@ -81,7 +81,7 @@ impl ClientUsernamePassword {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), ClientUsernamePasswordWriteError> {
         w.write_u8(1).await?;

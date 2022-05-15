@@ -41,13 +41,14 @@ macro_rules! standard_roundtrip {
                 tokio::runtime::Runtime::new().unwrap().block_on(async {
                     use std::io::Cursor;
 
+                    let originals = xs.clone();
                     let buffer = vec![];
                     let mut write_cursor = Cursor::new(buffer);
                     xs.write(&mut write_cursor).await.unwrap();
                     let serialized_form = write_cursor.into_inner();
                     let mut read_cursor = Cursor::new(serialized_form);
                     let ys = <$t>::read(&mut read_cursor);
-                    assert_eq!(xs, ys.await.unwrap());
+                    assert_eq!(originals, ys.await.unwrap());
                 })
             }
         }

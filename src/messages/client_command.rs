@@ -55,7 +55,7 @@ impl ClientConnectionCommand {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), std::io::Error> {
         match self {
@@ -125,7 +125,7 @@ impl ClientConnectionRequest {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), ClientConnectionCommandWriteError> {
         w.write_u8(5).await?;

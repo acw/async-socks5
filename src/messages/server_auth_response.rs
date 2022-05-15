@@ -59,7 +59,7 @@ impl ServerAuthResponse {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), ServerAuthResponseWriteError> {
         w.write_all(&[1]).await?;

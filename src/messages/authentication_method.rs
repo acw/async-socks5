@@ -118,7 +118,7 @@ impl AuthenticationMethod {
     }
 
     pub async fn write<W: AsyncWrite + Send + Unpin>(
-        &self,
+        self,
         w: &mut W,
     ) -> Result<(), AuthenticationMethodWriteError> {
         let value = match self {
@@ -131,9 +131,9 @@ impl AuthenticationMethod {
             AuthenticationMethod::NDS => 7,
             AuthenticationMethod::MultiAuthenticationFramework => 8,
             AuthenticationMethod::JSONPropertyBlock => 9,
-            AuthenticationMethod::PrivateMethod(pm) if (0x80..=0xfe).contains(pm) => *pm,
+            AuthenticationMethod::PrivateMethod(pm) if (0x80..=0xfe).contains(&pm) => pm,
             AuthenticationMethod::PrivateMethod(pm) => {
-                return Err(AuthenticationMethodWriteError::InvalidAuthMethod(*pm))
+                return Err(AuthenticationMethodWriteError::InvalidAuthMethod(pm))
             }
             AuthenticationMethod::NoAcceptableMethods => 0xff,
         };
