@@ -1,0 +1,15 @@
+# Unless otherwise sepcified, use this log level
+log_level = "TRACE"
+# Unless the command line specifies servers (or includes --validate),
+# start the following named servers.
+start_servers = "loopback*,ethernet"
+
+[loopback4]
+interface="lo0"
+log_level="TRACE"
+address="127.0.0.1"
+
+[loopback6]
+interface="lo0"
+log_level="DEBUG"
+address="::1"

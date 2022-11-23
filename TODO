@@ -1,0 +1,2 @@
+  * [ ] Turn `write` from &self to self
+  * [ ] Turn `read`/`write` into a typeclass of some kind.
