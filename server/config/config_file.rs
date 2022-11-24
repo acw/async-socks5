@@ -1,10 +1,10 @@
 use super::ConfigError;
+use etcetera::base_strategy::{choose_base_strategy, BaseStrategy};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tracing::metadata::LevelFilter;
-use xdg::BaseDirectories;
 
 #[derive(serde_derive::Deserialize, Default)]
 pub struct ConfigFile {
@@ -42,8 +42,10 @@ where
 impl ConfigFile {
     pub fn read(mut config_file_path: Option<PathBuf>) -> Result<ConfigFile, ConfigError> {
         if config_file_path.is_none() {
-            let base_dirs = BaseDirectories::with_prefix("socks5")?;
-            let proposed_path = base_dirs.get_config_home();
+            let base_dirs = choose_base_strategy()
+                .map_err(|e| ConfigError::HostDirectoryError(e.to_string()))?;
+            let mut proposed_path = base_dirs.config_dir();
+            proposed_path.push("socks5");
             if let Ok(attributes) = fs::metadata(proposed_path.clone()) {
                 if attributes.is_file() {
                     config_file_path = Some(proposed_path);

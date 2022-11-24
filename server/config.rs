@@ -10,14 +10,11 @@ use std::net::{AddrParseError, IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 use thiserror::Error;
 use tracing::metadata::LevelFilter;
-use xdg::BaseDirectoriesError;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error(transparent)]
     CommandLineError(#[from] clap::Error),
-    #[error("Error querying XDG base directories: {0}")]
-    XdgError(#[from] BaseDirectoriesError),
     #[error(transparent)]
     IOError(#[from] io::Error),
     #[error("TOML processing error: {0}")]
@@ -26,6 +23,8 @@ pub enum ConfigError {
     NoAddressForInterface(String, String),
     #[error("Server '{0}' specifies an address we couldn't parse: {1}")]
     AddressParseError(String, AddrParseError),
+    #[error("Host directory error {0}")]
+    HostDirectoryError(String),
 }
 
 #[derive(Debug)]
